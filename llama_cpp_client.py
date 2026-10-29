@@ -59,13 +59,16 @@ class AutoThinkingPolicy:
 
 class AutoContextPolicy:
     """
-    Intelligent Auto-Context Policy for LFM3 Swarm Agents & Pi Assistant.
+    Intelligent Auto-Context Policy for Swarm Agents & Pi Assistant (LFM3 & Spark-X2.6).
     Dynamically sizes context allocation and generation token headroom based on task complexity:
     - Tier 1: Micro / Patch (single function, 2,048 tokens).
     - Tier 2: Module / Intra-file context with tests (8,192 tokens).
     - Tier 3: Multi-file / Call Graph & Architecture (32,768 tokens).
-    - Tier 4: Cross-crate / Monorepo Integration (65,536 - 131,072 tokens).
-    - Tier 5: Extreme / Full Repo Ingestion (up to 262,144 tokens max trained).
+    - Tier 4: Cross-crate / Subsystem Integration (65,536 tokens).
+    - Tier 5: Deep Codebase (131,072 tokens).
+    - Tier 6: Monorepo Log / Audit (262,144 tokens - LFM3 native ceiling).
+    - Tier 7: Extended Monorepo Audit (524,288 tokens).
+    - Tier 8: Full Codebase 1M Ingestion (1,048,576 tokens - Spark-X2.6 native ceiling).
     """
     TIERS = [
         (1500, 2048, 512, "Tier 1: Micro Patch (2k)"),
@@ -73,7 +76,9 @@ class AutoContextPolicy:
         (24000, 32768, 2048, "Tier 3: Call Graph / Multi-File (32k)"),
         (50000, 65536, 4096, "Tier 4: Subsystem / Integration (64k)"),
         (100000, 131072, 8192, "Tier 5: Deep Codebase (128k)"),
-        (250000, 262144, 8192, "Tier 6: Maximum Monorepo (256k)")
+        (350000, 262144, 8192, "Tier 6: Full Monorepo (256k)"),
+        (600000, 524288, 16384, "Tier 7: Extended Monorepo Audit (512k)"),
+        (1200000, 1048576, 16384, "Tier 8: Ultra 1M Codebase Ingestion (1M)")
     ]
 
     @classmethod
@@ -82,7 +87,8 @@ class AutoContextPolicy:
         mode: Union[str, int] = "auto",
         prompt: str = "",
         task_intent: str = "code",
-        file_count: int = 1
+        file_count: int = 1,
+        max_model_ctx: int = 1048576
     ) -> Dict[str, Any]:
         """
         Resolves context size and recommended n_predict token budget.
@@ -93,15 +99,29 @@ class AutoContextPolicy:
             if isinstance(mode, int):
                 ctx = mode
             else:
-                m = str(mode).lower().replace("k", "000")
-                try:
-                    ctx = int(m)
-                except ValueError:
-                    ctx = 32768
+                m = str(mode).lower().strip()
+                if m in ("1m", "1024k"):
+                    ctx = 1048576
+                elif m.endswith("m"):
+                    try:
+                        ctx = int(float(m[:-1]) * 1000000)
+                    except ValueError:
+                        ctx = 1048576
+                elif m.endswith("k"):
+                    try:
+                        ctx = int(float(m[:-1]) * 1000)
+                    except ValueError:
+                        ctx = 32768
+                else:
+                    try:
+                        ctx = int(m)
+                    except ValueError:
+                        ctx = 32768
+            clamped_ctx = min(ctx, max_model_ctx)
             return {
-                "ctx_size": min(ctx, 262144),
-                "n_predict": min(max(512, ctx // 4), 4096),
-                "tier": f"Manual Override ({ctx} tokens)",
+                "ctx_size": clamped_ctx,
+                "n_predict": min(max(512, clamped_ctx // 4), 16384),
+                "tier": f"Manual Override ({clamped_ctx} tokens)",
                 "mode": "override"
             }
 
@@ -120,18 +140,20 @@ class AutoContextPolicy:
 
         for token_threshold, target_ctx, n_pred, label in cls.TIERS:
             if est_tokens <= token_threshold:
+                clamped_ctx = min(target_ctx, max_model_ctx)
                 return {
-                    "ctx_size": target_ctx,
-                    "n_predict": n_pred,
+                    "ctx_size": clamped_ctx,
+                    "n_predict": min(n_pred, max(512, clamped_ctx // 4)),
                     "tier": label,
                     "mode": "auto"
                 }
 
-        # Default fallback to max
+        # Default fallback to max model ctx
+        clamped_ctx = max_model_ctx
         return {
-            "ctx_size": 262144,
-            "n_predict": 8192,
-            "tier": "Tier 6: Maximum Monorepo (256k)",
+            "ctx_size": clamped_ctx,
+            "n_predict": 16384 if clamped_ctx >= 524288 else 8192,
+            "tier": f"Maximum Context ({clamped_ctx // 1024}k)",
             "mode": "auto"
         }
 
@@ -139,10 +161,11 @@ class LlamaCppClient:
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8080",
-        model: str = "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
-        timeout: float = 35.0,
+        model: str = "models/Spark-X2.6-4B-Q4_K_M.gguf",
+        timeout: float = 45.0,
         thinking_mode: Union[str, bool] = "auto",
-        context_mode: Union[str, int] = "auto"
+        context_mode: Union[str, int] = "auto",
+        model_family: Optional[str] = None
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -151,6 +174,16 @@ class LlamaCppClient:
         self.context_mode = context_mode
         self.policy = AutoThinkingPolicy()
         self.context_policy = AutoContextPolicy()
+        
+        # Detect model family and context ceiling
+        if model_family:
+            self.model_family = model_family.lower()
+        elif "spark" in model.lower():
+            self.model_family = "spark"
+        else:
+            self.model_family = "lfm3"
+
+        self.max_model_ctx = 1048576 if self.model_family == "spark" else 262144
 
     def check_health(self) -> bool:
         try:
@@ -167,17 +200,32 @@ class LlamaCppClient:
         temperature: float = 0.0,
         max_tokens: int = 600,
         response_format: Optional[Dict[str, Any]] = None,
-        grammar: Optional[str] = None
+        grammar: Optional[str] = None,
+        task_intent: str = "code",
+        is_retry: bool = False,
+        enable_thinking: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Sends chat completion request to llama-server.
+        Supports native thinking resolution and chat_template_kwargs toggling.
         """
+        if enable_thinking is None:
+            last_prompt = messages[-1].get("content", "") if messages else ""
+            enable_thinking = self.policy.resolve(
+                mode=self.thinking_mode,
+                task_intent=task_intent,
+                has_schema=bool(response_format),
+                is_retry=is_retry,
+                prompt=last_prompt
+            )
+
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "stream": False
+            "stream": False,
+            "chat_template_kwargs": {"enable_thinking": enable_thinking}
         }
         if response_format:
             payload["response_format"] = response_format
