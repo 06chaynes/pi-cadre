@@ -13,20 +13,56 @@ import urllib.error
 import json
 import time
 import socket
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 socket.setdefaulttimeout(40.0)
+
+class AutoThinkingPolicy:
+    """
+    Intelligent Auto-Thinking Policy for LFM3 Swarm Agents.
+    Decides when thinking (<think>...</think>) should be enabled vs disabled:
+    - Code Synthesis & Micro-Editing: OFF (steered via prefix pre-fill to avoid token budget exhaustion).
+    - Structured Schemas (JSON/GBNF): OFF (guarantees valid first-token JSON compliance).
+    - Complex Diagnosis / Root-Cause Planning: ON (allows exploratory reasoning paths).
+    - Execution-Feedback Retries: ON when complex logic tracebacks are detected.
+    """
+    @staticmethod
+    def resolve(
+        mode: Union[str, bool] = "auto",
+        task_intent: str = "code",
+        has_schema: bool = False,
+        is_retry: bool = False,
+        prompt: str = ""
+    ) -> bool:
+        if mode in (True, "on", "true", "True"):
+            return True
+        if mode in (False, "off", "false", "False"):
+            return False
+
+        # "auto" resolution logic
+        if has_schema:
+            return False
+        if task_intent in ("code", "synthesis", "micro_patch", "completion"):
+            return False
+        if task_intent in ("diagnosis", "reasoning", "trace_analysis", "planning"):
+            return True
+        if is_retry and ("assert" in prompt.lower() or "traceback" in prompt.lower()):
+            return True
+        return False
 
 class LlamaCppClient:
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8080",
         model: str = "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
-        timeout: float = 35.0
+        timeout: float = 35.0,
+        thinking_mode: Union[str, bool] = "auto"
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.thinking_mode = thinking_mode
+        self.policy = AutoThinkingPolicy()
 
     def check_health(self) -> bool:
         try:

@@ -24,13 +24,14 @@ from run_requests_repo_benchmark import (
 )
 
 class LlamaCppBenchmarkRunner:
-    def __init__(self, base_url: str = "http://127.0.0.1:8080"):
-        self.client = LlamaCppClient(base_url=base_url)
+    def __init__(self, base_url: str = "http://127.0.0.1:8080", thinking_mode: str = "auto"):
+        self.thinking_mode = thinking_mode
+        self.client = LlamaCppClient(base_url=base_url, thinking_mode=thinking_mode)
         self.indexer = RepoASTIndexer(repo_root=os.path.join(REPO_DIR, "requests"))
         assert self.client.check_health(), f"llama-server not reachable at {base_url}"
 
     def run_benchmark_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        print(f"\n=== [llama.cpp] Running {task['id']}: {task['title']} ===")
+        print(f"\n=== [llama.cpp (Thinking={self.thinking_mode})] Running {task['id']}: {task['title']} ===")
         reset_repo(REPO_DIR)
         task["defect_fn"](REPO_DIR)
 
@@ -115,7 +116,7 @@ class LlamaCppBenchmarkRunner:
 
         print(f" -> Context: {e_l - s_l + 1} lines (lines {s_l}-{e_l}) with base indent {base_indent}")
 
-        # Step 5: Surgeon Generation with Prefix Pre-Filling via /completion
+        # Step 5: Surgeon Generation with Auto-Thinking Policy Resolution
         t_surg = time.time()
         sys_prompt = (
             "You are a Principal Software Engineer repairing a bug in requests.\n"
@@ -129,24 +130,51 @@ class LlamaCppBenchmarkRunner:
             f"[BUG SPECIFICATION]:\n{task['description']}\n\n"
             f"[SOURCE CODE WINDOW]:\n```python\n{code_window}\n```"
         )
-        full_prompt = (
-            f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-            f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
-            f"<|im_start|>assistant\n```python\n{prefill}"
-        )
 
-        comp_res = self.client.completion(
-            prompt=full_prompt,
-            n_predict=450,
-            temperature=0.0,
-            stop=["```", "<|im_end|>", "<|endoftext|>"]
+        initial_think = self.client.policy.resolve(
+            mode=self.thinking_mode,
+            task_intent="synthesis",
+            has_schema=False,
+            is_retry=False,
+            prompt=task["description"]
         )
+        print(f" -> Auto-Thinking Policy: Initial Pass Think={initial_think} (Mode={self.thinking_mode})")
+
+        if initial_think:
+            full_prompt = (
+                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+                f"<|im_start|>assistant\n<think>\n"
+            )
+            comp_res = self.client.completion(
+                prompt=full_prompt,
+                n_predict=900,
+                temperature=0.0,
+                stop=["<|im_end|>", "<|endoftext|>"]
+            )
+            raw_text = comp_res.get("content", "")
+            blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_text, re.DOTALL)
+            candidate_code = blocks[0].strip() if blocks else raw_text.strip()
+            if not candidate_code.startswith("def ") and prefill.startswith("def "):
+                candidate_code = prefill + "\n" + candidate_code
+        else:
+            full_prompt = (
+                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+                f"<|im_start|>assistant\n```python\n{prefill}"
+            )
+            comp_res = self.client.completion(
+                prompt=full_prompt,
+                n_predict=450,
+                temperature=0.0,
+                stop=["```", "<|im_end|>", "<|endoftext|>"]
+            )
+            candidate_code = prefill + comp_res.get("content", "")
+
         surg_latency = time.time() - t_surg
         tokens_gen = comp_res.get("tokens", 0)
         tok_speed = comp_res.get("tokens_per_sec", 0.0)
         print(f" -> Generated {tokens_gen} tokens at {tok_speed} tok/s in {surg_latency:.2f}s")
-
-        candidate_code = prefill + comp_res.get("content", "")
 
         # Foundational Improvement: AST Inner-Import Sanitizer
         # Eliminates hallucinated local imports emitted inside function bodies
@@ -203,18 +231,45 @@ class LlamaCppBenchmarkRunner:
                 f"[TEST FAILURE TRACEBACK]:\n{err_summary}\n\n"
                 f"Fix the bug to resolve this failure. Output ONLY the corrected Python code."
             )
-            repair_prompt = (
-                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-                f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
-                f"<|im_start|>assistant\n```python\n{prefill}"
+            retry_think = self.client.policy.resolve(
+                mode=self.thinking_mode,
+                task_intent="diagnosis",
+                has_schema=False,
+                is_retry=True,
+                prompt=err_summary
             )
-            heal_res = self.client.completion(
-                prompt=repair_prompt,
-                n_predict=450,
-                temperature=0.0,
-                stop=["```", "<|im_end|>", "<|endoftext|>"]
-            )
-            heal_code = prefill + heal_res.get("content", "")
+            print(f" -> Auto-Thinking Policy: Self-Healing Think={retry_think}")
+
+            if retry_think:
+                repair_prompt = (
+                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n<think>\n"
+                )
+                heal_res = self.client.completion(
+                    prompt=repair_prompt,
+                    n_predict=900,
+                    temperature=0.0,
+                    stop=["<|im_end|>", "<|endoftext|>"]
+                )
+                raw_heal = heal_res.get("content", "")
+                h_blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_heal, re.DOTALL)
+                heal_code = h_blocks[0].strip() if h_blocks else raw_heal.strip()
+                if not heal_code.startswith("def ") and prefill.startswith("def "):
+                    heal_code = prefill + "\n" + heal_code
+            else:
+                repair_prompt = (
+                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n```python\n{prefill}"
+                )
+                heal_res = self.client.completion(
+                    prompt=repair_prompt,
+                    n_predict=450,
+                    temperature=0.0,
+                    stop=["```", "<|im_end|>", "<|endoftext|>"]
+                )
+                heal_code = prefill + heal_res.get("content", "")
             try:
                 h_tree = ast.parse(heal_code)
                 if len(h_tree.body) == 1 and isinstance(h_tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):

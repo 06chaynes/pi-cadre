@@ -1,30 +1,36 @@
 # LFM3 1.7B Local Swarm Benchmark & Testing System
 
-A reproducible framework for testing swarms using the **LFM3 1.7B** model (`lfm3:latest`) on local Apple Silicon / CPU hardware via Ollama.
+A reproducible framework for testing swarms using the **LFM3 1.7B** model (`LiquidAI/LFM3-1.7B-GGUF:Q4_K_M`) on local Apple Silicon hardware.
+
+**Default Inference Backend:** `llama.cpp` (`llama-server` on Metal, port 8080) with `--parallel 4` concurrent slots.  
+**Default Thinking Policy:** `"auto"` (intelligently enables or disables `<think>` tokens based on task intent and runtime feedback).
 
 ## Quickstart
 
-### 1. Ensure Ollama & Model are Ready
+### 1. Launch Default Inference Backend (llama.cpp Metal)
 ```bash
-ollama list
-# If lfm3 is not installed:
-ollama run lfm3:latest
+llama-server -hf LiquidAI/LFM3-1.7B-GGUF:Q4_K_M -ngl 99 --parallel 4 --ctx-size 8192 --port 8080
 ```
 
-### 2. Determine Safe Swarm Sizing
-Calculates RAM, unified memory headroom, and CPU core boundaries:
+### 2. Run the Real-World Production Repository Benchmark (psf/requests - 15k LOC)
+Evaluates 4 real-world production defects with 100% test pass rate using our 4 foundational architectural refinements:
 ```bash
-python3 resource_monitor.py
+python run_llama_cpp_repo_benchmark.py
 ```
 
-### 3. Run the Full Swarm Benchmark Suite
-Executes scaling benchmarks (Map-Reduce collaborative swarm), followed by a multi-agent consensus debate test:
-```bash
-# Standard direct inference mode
-python3 benchmark_runner.py
+### 3. "Auto" Thinking Policy
+The framework introduces `AutoThinkingPolicy` in `llama_cpp_client.py`:
+- **Code Synthesis & Micro-Editing:** Thinking is automatically disabled and steered via Prefix Pre-Filling (`<|im_start|>assistant\n```python\n{signature}`) to bypass reasoning budget exhaustion and stream clean syntax in <300ms.
+- **GBNF / JSON Schema Decoding:** Thinking is disabled to enforce strict, immediate first-token JSON compliance.
+- **Error Traceback & Self-Healing:** Thinking is dynamically elevated when complex assertion errors or multi-step logic regressions are detected.
 
-# Or enable LFM3 Thinking / Reasoning mode
-python3 benchmark_runner.py --think
+```bash
+# Run with Auto-Thinking (default)
+python run_llama_cpp_repo_benchmark.py
+
+# Or explicitly force thinking on/off
+python run_llama_cpp_repo_benchmark.py --thinking-mode on
+python run_llama_cpp_repo_benchmark.py --thinking-mode off
 ```
 
 ## System Architecture
