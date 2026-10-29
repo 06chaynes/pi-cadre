@@ -6,10 +6,27 @@ export LLAMA_BASE_URL=${LLAMA_BASE_URL:-"http://127.0.0.1:8080"}
 export OPENAI_BASE_URL=${OPENAI_BASE_URL:-"http://127.0.0.1:8080/v1"}
 export OPENAI_API_KEY="none"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Robust path resolution across symlinks
+PRG="${BASH_SOURCE[0]}"
+while [ -h "$PRG" ]; do
+    ls=$(ls -ld "$PRG")
+    link=$(expr "$ls" : '.*-> \(.*\)$')
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG="$(dirname "$PRG")/$link"
+    fi
+done
+SCRIPT_DIR="$(cd "$(dirname "$PRG")" && pwd)"
+if [ "$(basename "$SCRIPT_DIR")" = "launchers" ]; then
+    PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    PROJECT_DIR="$SCRIPT_DIR"
+fi
+
 EXT_FLAG=""
-if [ -f "$SCRIPT_DIR/pi_extensions/lfm3_agent_extension.ts" ]; then
-    EXT_FLAG="-e $SCRIPT_DIR/pi_extensions/lfm3_agent_extension.ts"
+if [ -f "$PROJECT_DIR/pi_extensions/lfm3_agent_extension.ts" ]; then
+    EXT_FLAG="-e $PROJECT_DIR/pi_extensions/lfm3_agent_extension.ts"
 fi
 
 if command -v pi &> /dev/null; then
