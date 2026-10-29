@@ -6,8 +6,14 @@ export LLAMA_BASE_URL=${LLAMA_BASE_URL:-"http://127.0.0.1:8080"}
 export OPENAI_BASE_URL=${OPENAI_BASE_URL:-"http://127.0.0.1:8080/v1"}
 export OPENAI_API_KEY="none"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EXT_FLAG=""
+if [ -f "$SCRIPT_DIR/pi_extensions/lfm3_agent_extension.ts" ]; then
+    EXT_FLAG="-e $SCRIPT_DIR/pi_extensions/lfm3_agent_extension.ts"
+fi
+
 if command -v pi &> /dev/null; then
-    exec pi --provider llama-cpp --model "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M" "$@"
+    exec pi --provider llama-cpp --model "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M" $EXT_FLAG "$@"
 else
     echo "ERROR: pi executable not found in PATH."
     echo "Run: python3 setup_wizard.py"

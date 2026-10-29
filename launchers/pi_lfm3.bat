@@ -13,4 +13,9 @@ IF %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-pi --provider llama-cpp --model LiquidAI/LFM3-1.7B-GGUF:Q4_K_M %*
+SET EXT_FLAG=
+IF EXIST "%~dp0..\pi_extensions\lfm3_agent_extension.ts" (
+    SET EXT_FLAG=-e "%~dp0..\pi_extensions\lfm3_agent_extension.ts"
+)
+
+pi --provider llama-cpp --model LiquidAI/LFM3-1.7B-GGUF:Q4_K_M %EXT_FLAG% %*
