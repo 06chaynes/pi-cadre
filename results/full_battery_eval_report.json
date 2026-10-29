@@ -1,0 +1,151 @@
+{
+  "timestamp": "2026-10-29 14:25:23",
+  "backend": "llama.cpp (Metal)",
+  "thinking_mode": "auto",
+  "total_time_sec": 28.39,
+  "overall_pass_rate_pct": 100.0,
+  "suite_a_policy": {
+    "suite": "Suite A: Auto-Thinking Policy",
+    "passed": true,
+    "total_tests": 6,
+    "passed_tests": 6,
+    "details": [
+      {
+        "test_case": "Direct Code Synthesis",
+        "resolved": false,
+        "expected": false,
+        "passed": true
+      },
+      {
+        "test_case": "Prefix Code Completion",
+        "resolved": false,
+        "expected": false,
+        "passed": true
+      },
+      {
+        "test_case": "GBNF / JSON Schema Decoding",
+        "resolved": false,
+        "expected": false,
+        "passed": true
+      },
+      {
+        "test_case": "Root-Cause Diagnostic Analysis",
+        "resolved": true,
+        "expected": true,
+        "passed": true
+      },
+      {
+        "test_case": "High-Level Architecture Planning",
+        "resolved": true,
+        "expected": true,
+        "passed": true
+      },
+      {
+        "test_case": "Execution Retry with AssertionError",
+        "resolved": true,
+        "expected": true,
+        "passed": true
+      }
+    ]
+  },
+  "suite_b_requests_repo": {
+    "suite": "Suite B: psf/requests (15k LOC)",
+    "passed": true,
+    "pass_count": 4,
+    "total_tasks": 4,
+    "total_latency": 24.38,
+    "results": [
+      {
+        "task_id": "TASK-1",
+        "title": "Proxy URL Auth Preservation",
+        "passed": true,
+        "latency": 5.43,
+        "scout_match": true,
+        "backend": "llama.cpp (Metal)"
+      },
+      {
+        "task_id": "TASK-2",
+        "title": "CA Bundle Environment Fallback",
+        "passed": true,
+        "latency": 6.75,
+        "scout_match": true,
+        "backend": "llama.cpp (Metal)"
+      },
+      {
+        "task_id": "TASK-3",
+        "title": "URL Credential Unquoting",
+        "passed": true,
+        "latency": 4.15,
+        "scout_match": true,
+        "backend": "llama.cpp (Metal)"
+      },
+      {
+        "task_id": "TASK-4",
+        "title": "Multi-Hop Redirect State Drift",
+        "passed": true,
+        "latency": 7.87,
+        "scout_match": true,
+        "backend": "llama.cpp (Metal)"
+      }
+    ]
+  },
+  "suite_c_swe_bench_mini": {
+    "suite": "Suite C: SWE-Bench Lite Mini",
+    "passed": true,
+    "pass_count": 5,
+    "total_tasks": 5,
+    "total_latency": 4.01,
+    "results": [
+      {
+        "instance_id": "django__django-10914",
+        "repo": "django/django",
+        "passed": true,
+        "keyword_match": true,
+        "ast_valid": true,
+        "latency": 0.8,
+        "tokens": 51,
+        "tokens_per_sec": 63.98
+      },
+      {
+        "instance_id": "pytest-dev__pytest-11143",
+        "repo": "pytest-dev/pytest",
+        "passed": true,
+        "keyword_match": true,
+        "ast_valid": true,
+        "latency": 0.77,
+        "tokens": 54,
+        "tokens_per_sec": 70.35
+      },
+      {
+        "instance_id": "psf__requests-1963",
+        "repo": "psf/requests",
+        "passed": true,
+        "keyword_match": true,
+        "ast_valid": true,
+        "latency": 0.44,
+        "tokens": 23,
+        "tokens_per_sec": 52.77
+      },
+      {
+        "instance_id": "astropy__astropy-12907",
+        "repo": "astropy/astropy",
+        "passed": true,
+        "keyword_match": true,
+        "ast_valid": true,
+        "latency": 1.12,
+        "tokens": 74,
+        "tokens_per_sec": 65.79
+      },
+      {
+        "instance_id": "astropy__astropy-14995",
+        "repo": "astropy/astropy",
+        "passed": true,
+        "keyword_match": true,
+        "ast_valid": true,
+        "latency": 0.88,
+        "tokens": 59,
+        "tokens_per_sec": 66.96
+      }
+    ]
+  }
+}

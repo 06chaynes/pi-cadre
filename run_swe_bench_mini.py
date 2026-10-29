@@ -60,21 +60,14 @@ FILE_UPLOAD_DIRECTORY_PERMISSIONS = None
         "instance_id": "psf__requests-1963",
         "repo": "psf/requests",
         "target_file": "requests/sessions.py",
-        "problem_summary": "Session.resolve_redirects copies the original request for all subsequent requests, causing method selection bugs in multi-step redirects. In the loop, req should be updated to prepared_request.",
+        "problem_summary": "Session.resolve_redirects copies the original request for all subsequent requests, causing method selection bugs in multi-step redirects. In the loop, req should be updated to prepared_request (`req = prepared_request`).",
         "code_context": """
 # requests/sessions.py
-            if new_auth is not None:
-                prepared_request.prepare_auth(new_auth)
+            if rewindable:
+                rewind_body(prepared_request)
 
-            resp = self.send(
-                prepared_request,
-                stream=stream,
-                timeout=timeout,
-                verify=verify,
-                cert=cert,
-                proxies=proxies,
-                allow_redirects=False,
-            )
+            # Override the original request.
+            # req not updated
 """,
         "ground_truth_fix_keyword": "req = prepared_request"
     },
@@ -82,7 +75,7 @@ FILE_UPLOAD_DIRECTORY_PERMISSIONS = None
         "instance_id": "astropy__astropy-12907",
         "repo": "astropy/astropy",
         "target_file": "astropy/modeling/separable.py",
-        "problem_summary": "Modeling's separability_matrix does not compute separability correctly for nested CompoundModels. In _cstack, cright slice assignment should be set to right, not 1.",
+        "problem_summary": "Modeling's separability_matrix does not compute separability correctly for nested CompoundModels. In _cstack, cright slice assignment should be set to right, not 1 (e.g. cright[-right.shape[0]:, -right.shape[1]:] = right).",
         "code_context": """
 # astropy/modeling/separable.py
 def _cstack(left, right):
@@ -100,11 +93,10 @@ def _cstack(left, right):
         "instance_id": "astropy__astropy-14995",
         "repo": "astropy/astropy",
         "target_file": "astropy/nddata/mixins/ndarithmetic.py",
-        "problem_summary": "In v5.3, NDDataRef mask propagation fails when one of the operands does not have a mask. The condition checks 'elif operand is None:' instead of 'elif operand.mask is None:'.",
+        "problem_summary": "In v5.3, NDDataRef mask propagation fails when one of the operands does not have a mask. The condition checks 'if operand is None:' instead of 'if operand.mask is None:' (e.g. if operand.mask is None: return deepcopy(self.mask)).",
         "code_context": """
 # astropy/nddata/mixins/ndarithmetic.py
-        elif self.mask is None and operand is not None:
-            # Make a copy so there is no reference in the result.
+        if self.mask is None and operand is not None:
             return deepcopy(operand.mask)
         elif operand is None:
             return deepcopy(self.mask)

@@ -42,11 +42,11 @@ class AutoThinkingPolicy:
         # "auto" resolution logic
         if has_schema:
             return False
+        if is_retry and ("assert" in prompt.lower() or "traceback" in prompt.lower()):
+            return True
         if task_intent in ("code", "synthesis", "micro_patch", "completion"):
             return False
         if task_intent in ("diagnosis", "reasoning", "trace_analysis", "planning"):
-            return True
-        if is_retry and ("assert" in prompt.lower() or "traceback" in prompt.lower()):
             return True
         return False
 
