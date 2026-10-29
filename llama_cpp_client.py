@@ -1,568 +1,158 @@
-"""
-High-Performance Llama.cpp Client for Swarm Agents.
-Connects to llama-server on port 8080 (Metal-accelerated GGUF execution).
-Features:
-- OpenAI-compatible /v1/chat/completions
-- GBNF Grammar and JSON Schema structured decoding
-- Native separation of reasoning_content vs content
-- Generation latency and tokens/sec telemetry
-"""
+"""llama-server client that routes requests between Spark-X2.6-4B and LFM3-1.7B and toggles thinking per request."""
 
-import urllib.request
-import urllib.error
 import json
+import re
 import time
-import socket
-from typing import Dict, Any, List, Optional, Union
+import urllib.request
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-socket.setdefaulttimeout(40.0)
+MODELS = {
+    "spark": {"name": "Spark-X2.6-4B", "url": "http://127.0.0.1:8080"},
+    "lfm3": {"name": "LFM3-1.7B", "url": "http://127.0.0.1:8081"},
+}
+CODE_BLOCK = re.compile(r"```(?:python)?\s*(.*?)\s*```", re.DOTALL)
+
+
+def extract_code(text: str) -> str:
+    """Returns the first fenced code block in text, or the whole text if there is none."""
+    blocks = CODE_BLOCK.findall(text)
+    return (blocks[0] if blocks else text).strip()
+
 
 class AutoThinkingPolicy:
-    """
-    Intelligent Auto-Thinking Policy for Multi-Model Swarm Agents (LFM3 & Spark-X2.6).
-    Decides when thinking (<think>...</think>) should be enabled vs disabled:
-    - Code Synthesis & Micro-Editing: OFF (steered via prefix pre-fill to avoid token budget exhaustion).
-    - Structured Schemas (JSON/GBNF): OFF (guarantees valid first-token JSON compliance).
-    - Complex Diagnosis / Root-Cause Planning: ON (allows exploratory reasoning paths).
-    - Execution-Feedback Retries: ON when complex logic tracebacks are detected.
-    """
-    @staticmethod
-    def resolve(
-        mode: Union[str, bool] = "auto",
-        task_intent: str = "code",
-        has_schema: bool = False,
-        is_retry: bool = False,
-        prompt: str = ""
-    ) -> bool:
-        if mode in (True, "on", "true", "True"):
-            return True
-        if mode in (False, "off", "false", "False"):
-            return False
+    """Thinking is off for code and schema output, and on for diagnosis, planning, and retries after a test failure."""
 
-        # "auto" resolution logic
+    RETRY_SIGNALS = ("assert", "traceback", "error[", "mismatched", "cannot borrow", "failed")
+
+    @classmethod
+    def resolve(cls, mode="auto", task_intent="code", has_schema=False, is_retry=False, prompt="") -> bool:
+        if mode in (True, "on"):
+            return True
+        if mode in (False, "off"):
+            return False
         if has_schema:
             return False
-        if is_retry and (
-            "assert" in prompt.lower()
-            or "traceback" in prompt.lower()
-            or "error[" in prompt.lower()
-            or "mismatched" in prompt.lower()
-            or "cannot borrow" in prompt.lower()
-            or "failed" in prompt.lower()
-        ):
+        if is_retry and any(s in prompt.lower() for s in cls.RETRY_SIGNALS):
             return True
-        if task_intent in ("code", "synthesis", "micro_patch", "completion"):
-            return False
-        if task_intent in ("diagnosis", "reasoning", "trace_analysis", "planning"):
-            return True
-        return False
+        return task_intent in ("diagnosis", "reasoning", "trace_analysis", "planning")
+
 
 class AutoModelPolicy:
-    """
-    Intelligent Model Selection Policy for Multi-Model Swarms.
-    Selects between:
-      1. Spark-X2.6-4B (port 8080): 4.0B params, 1M context, deep multi-step reasoning, tool use.
-      2. LFM3-1.7B (port 8081): 1.7B params, 256k context, ultra-fast linear SSM micro-patching (0.4s).
-    Supports:
-      - Global override: mode="spark" or mode="lfm3"
-      - Auto mode: mode="auto" (dynamically selects the optimal model based on latency vs reasoning depth)
-    """
-    SPARK_CONFIG = {
-        "id": "spark",
-        "name": "Spark-X2.6-4B",
-        "port": 8080,
-        "base_url": "http://127.0.0.1:8080",
-        "max_context": 1048576,
-        "default_slots": 8
-    }
-    LFM3_CONFIG = {
-        "id": "lfm3",
-        "name": "LFM3-1.7B",
-        "port": 8081,
-        "base_url": "http://127.0.0.1:8081",
-        "max_context": 262144,
-        "default_slots": 16
-    }
+    """Mode "spark" or "lfm3" forces a model. In "auto", short patching and scouting tasks go to LFM3, everything else to Spark."""
+
+    LFM3_INTENTS = ("micro_patch", "completion", "fencepost", "scout", "schema", "swarm_worker")
 
     @classmethod
-    def resolve(
-        cls,
-        mode: str = "auto",
-        task_intent: str = "code",
-        context_needed: int = 2048,
-        is_micro_patch: bool = False,
-        requires_deep_reasoning: bool = False,
-        prompt: str = ""
-    ) -> Dict[str, Any]:
-        # Global override
-        m = str(mode or "auto").lower().strip()
-        if m in ("spark", "spark-4b", "spark2.6", "spark2_6"):
-            return {**cls.SPARK_CONFIG, "selection_reason": "Global Override (Spark-X2.6-4B)", "mode": "override"}
-        if m in ("lfm3", "lfm", "lfm3-1.7b"):
-            return {**cls.LFM3_CONFIG, "selection_reason": "Global Override (LFM3-1.7B)", "mode": "override"}
+    def resolve(cls, mode="auto", task_intent="code", context_needed=2048) -> str:
+        if mode in MODELS:
+            return mode
+        if context_needed <= 131072 and task_intent in cls.LFM3_INTENTS:
+            return "lfm3"
+        return "spark"
 
-        # Auto resolution
-        # 1. Massive context requirements (>131k tokens up to 1M) -> Spark-X2.6-4B
-        if context_needed > 131072:
-            return {**cls.SPARK_CONFIG, "selection_reason": f"High Context Requirement ({context_needed} tokens > 131k)", "mode": "auto"}
-
-        # 2. Ultra-low latency micro-patching (<2k tokens, prefix prefill, fencepost bug fixes) -> LFM3-1.7B
-        if is_micro_patch or task_intent in ("micro_patch", "completion", "fencepost"):
-            return {**cls.LFM3_CONFIG, "selection_reason": "Ultra-Low Latency Micro-Patching (SSM Linear Attention)", "mode": "auto"}
-
-        # 3. High-level architecture, diagnostic self-healing, multi-step planning -> Spark-X2.6-4B
-        if requires_deep_reasoning or task_intent in ("architecture", "diagnosis", "planning", "root_cause", "trace_analysis"):
-            return {**cls.SPARK_CONFIG, "selection_reason": "Deep Multi-Step Reasoning & Root-Cause Diagnosis", "mode": "auto"}
-
-        # 4. High-throughput swarm routines (AST symbol scanning, structured schema decoding) -> LFM3-1.7B
-        if task_intent in ("scout", "schema", "swarm_worker"):
-            return {**cls.LFM3_CONFIG, "selection_reason": "High-Throughput Swarm Scout & Schema Decoding (16 parallel slots)", "mode": "auto"}
-
-        # Default: Spark-X2.6-4B for general software engineering and multi-file synthesis
-        return {**cls.SPARK_CONFIG, "selection_reason": "Balanced General Coding & Agent Synthesis", "mode": "auto"}
-
-class AutoContextPolicy:
-    """
-    Intelligent Auto-Context Policy for Swarm Agents & Pi Assistant (LFM3 & Spark-X2.6).
-    Dynamically sizes context allocation and generation token headroom based on task complexity:
-    - Tier 1: Micro / Patch (single function, 2,048 tokens).
-    - Tier 2: Module / Intra-file context with tests (8,192 tokens).
-    - Tier 3: Multi-file / Call Graph & Architecture (32,768 tokens).
-    - Tier 4: Cross-crate / Subsystem Integration (65,536 tokens).
-    - Tier 5: Deep Codebase (131,072 tokens).
-    - Tier 6: Monorepo Log / Audit (262,144 tokens - LFM3 native ceiling).
-    - Tier 7: Extended Monorepo Audit (524,288 tokens).
-    - Tier 8: Full Codebase 1M Ingestion (1,048,576 tokens - Spark-X2.6 native ceiling).
-    """
-    TIERS = [
-        (1500, 2048, 512, "Tier 1: Micro Patch (2k)"),
-        (6000, 8192, 1024, "Tier 2: Module Context (8k)"),
-        (24000, 32768, 2048, "Tier 3: Call Graph / Multi-File (32k)"),
-        (50000, 65536, 4096, "Tier 4: Subsystem / Integration (64k)"),
-        (100000, 131072, 8192, "Tier 5: Deep Codebase (128k)"),
-        (350000, 262144, 8192, "Tier 6: Full Monorepo (256k)"),
-        (600000, 524288, 16384, "Tier 7: Extended Monorepo Audit (512k)"),
-        (1200000, 1048576, 16384, "Tier 8: Ultra 1M Codebase Ingestion (1M)")
-    ]
-
-    @classmethod
-    def resolve(
-        cls,
-        mode: Union[str, int] = "auto",
-        prompt: str = "",
-        task_intent: str = "code",
-        file_count: int = 1,
-        max_model_ctx: int = 1048576
-    ) -> Dict[str, Any]:
-        """
-        Resolves context size and recommended n_predict token budget.
-        Returns: { 'ctx_size': int, 'n_predict': int, 'tier': str, 'mode': str }
-        """
-        # Explicit override
-        if mode not in ("auto", "Auto", None):
-            if isinstance(mode, int):
-                ctx = mode
-            else:
-                m = str(mode).lower().strip()
-                if m in ("1m", "1024k"):
-                    ctx = 1048576
-                elif m.endswith("m"):
-                    try:
-                        ctx = int(float(m[:-1]) * 1000000)
-                    except ValueError:
-                        ctx = 1048576
-                elif m.endswith("k"):
-                    try:
-                        ctx = int(float(m[:-1]) * 1000)
-                    except ValueError:
-                        ctx = 32768
-                else:
-                    try:
-                        ctx = int(m)
-                    except ValueError:
-                        ctx = 32768
-            clamped_ctx = min(ctx, max_model_ctx)
-            return {
-                "ctx_size": clamped_ctx,
-                "n_predict": min(max(512, clamped_ctx // 4), 16384),
-                "tier": f"Manual Override ({clamped_ctx} tokens)",
-                "mode": "override"
-            }
-
-        # Auto resolution
-        est_tokens = len(prompt) // 4  # ~4 chars per token approximation
-
-        # Boost tier based on task complexity
-        if task_intent in ("repo_wide", "audit", "trace_analysis"):
-            est_tokens = max(est_tokens, 50000)
-        elif task_intent in ("subsystem", "architecture"):
-            est_tokens = max(est_tokens, 25000)
-        elif task_intent in ("call_graph", "multi_file") or file_count > 3:
-            est_tokens = max(est_tokens, 10000)
-        elif task_intent in ("diagnosis", "planning"):
-            est_tokens = max(est_tokens, 3000)
-
-        for token_threshold, target_ctx, n_pred, label in cls.TIERS:
-            if est_tokens <= token_threshold:
-                clamped_ctx = min(target_ctx, max_model_ctx)
-                return {
-                    "ctx_size": clamped_ctx,
-                    "n_predict": min(n_pred, max(512, clamped_ctx // 4)),
-                    "tier": label,
-                    "mode": "auto"
-                }
-
-        # Default fallback to max model ctx
-        clamped_ctx = max_model_ctx
-        return {
-            "ctx_size": clamped_ctx,
-            "n_predict": 16384 if clamped_ctx >= 524288 else 8192,
-            "tier": f"Maximum Context ({clamped_ctx // 1024}k)",
-            "mode": "auto"
-        }
 
 class LlamaCppClient:
-    def __init__(
-        self,
-        base_url: str = "http://127.0.0.1:8080",
-        model: str = "models/Spark-X2.6-4B-Q4_K_M.gguf",
-        timeout: float = 45.0,
-        thinking_mode: Union[str, bool] = "auto",
-        context_mode: Union[str, int] = "auto",
-        model_mode: str = "auto",
-        model_family: Optional[str] = None
-    ):
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.timeout = timeout
+    def __init__(self, thinking_mode="auto", model_mode="auto", timeout=45.0):
         self.thinking_mode = thinking_mode
-        self.context_mode = context_mode
         self.model_mode = model_mode
-        self.policy = AutoThinkingPolicy()
-        self.context_policy = AutoContextPolicy()
-        self.model_policy = AutoModelPolicy()
+        self.timeout = timeout
 
-        self.endpoints = {
-            "spark": "http://127.0.0.1:8080",
-            "lfm3": "http://127.0.0.1:8081"
-        }
-        
-        # Detect model family and context ceiling
-        if model_family:
-            self.model_family = model_family.lower()
-        elif "spark" in model.lower():
-            self.model_family = "spark"
-        else:
-            self.model_family = "lfm3"
-
-        self.max_model_ctx = 1048576 if self.model_family == "spark" else 262144
-
-    def check_health(self, url: Optional[str] = None) -> bool:
-        target = (url or self.base_url).rstrip("/")
+    @staticmethod
+    def check_health(model: str) -> bool:
         try:
-            req = urllib.request.Request(f"{target}/health")
-            with urllib.request.urlopen(req, timeout=4.0) as resp:
-                data = json.loads(resp.read().decode())
-                return data.get("status") == "ok"
-        except Exception:
+            with urllib.request.urlopen(f"{MODELS[model]['url']}/health", timeout=4.0) as resp:
+                return json.load(resp).get("status") == "ok"
+        except (OSError, ValueError):
             return False
 
-    def ensure_servers(self, required_models: Optional[List[str]] = None) -> Dict[str, bool]:
-        """
-        Automatically verifies and boots required llama-server instances if offline.
-        Provides a single-click seamless execution experience.
-        """
-        import subprocess
-        needed = required_models or (["spark", "lfm3"] if self.model_mode == "auto" else [self.model_mode])
-        status = {}
+    def resolve_model(self, task_intent="code", context_needed=2048) -> str:
+        """Applies AutoModelPolicy. In auto mode, falls back to the other model when the chosen server is down."""
+        model = AutoModelPolicy.resolve(self.model_mode, task_intent, context_needed)
+        if self.model_mode == "auto" and not self.check_health(model):
+            return "lfm3" if model == "spark" else "spark"
+        return model
 
-        for m in needed:
-            m_key = "spark" if "spark" in m.lower() else "lfm3"
-            url = self.endpoints.get(m_key, self.base_url)
-            if self.check_health(url):
-                status[m_key] = True
-                continue
-
-            # Boot the missing server
-            if m_key == "spark":
-                cmd = [
-                    "llama-server",
-                    "-m", "models/Spark-X2.6-4B-Q4_K_M.gguf",
-                    "--port", "8080",
-                    "--ctx-size", "65536",
-                    "--parallel", "8",
-                    "-ngl", "99"
-                ]
-            else:
-                cmd = [
-                    "llama-server",
-                    "-hf", "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
-                    "--port", "8081",
-                    "--ctx-size", "32768",
-                    "--parallel", "16",
-                    "-ngl", "99"
-                ]
-
-            try:
-                subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
-                # Wait for health
-                for _ in range(12):
-                    time.sleep(0.5)
-                    if self.check_health(url):
-                        status[m_key] = True
-                        break
-                else:
-                    status[m_key] = False
-            except Exception:
-                status[m_key] = False
-
-        return status
-
-    def get_active_url(
-        self,
-        target_model: Optional[str] = None,
-        task_intent: str = "code",
-        context_needed: int = 2048,
-        is_micro_patch: bool = False,
-        prompt: str = ""
-    ) -> Tuple[str, str]:
-        """
-        Resolves active server URL and model ID based on AutoModelPolicy.
-        Returns: (base_url, model_id)
-        """
-        if target_model:
-            m_key = "spark" if "spark" in target_model.lower() else "lfm3"
-            return self.endpoints.get(m_key, self.base_url), m_key
-
-        plan = self.model_policy.resolve(
-            mode=self.model_mode,
-            task_intent=task_intent,
-            context_needed=context_needed,
-            is_micro_patch=is_micro_patch,
-            prompt=prompt
+    def _post(self, model: str, path: str, payload: Dict[str, Any], parse: Callable[[Dict], Tuple[str, int]]) -> Dict[str, Any]:
+        req = urllib.request.Request(
+            MODELS[model]["url"] + path,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
         )
-        url = self.endpoints.get(plan["id"], self.base_url)
-        # If resolved endpoint is down but base_url is alive, fallback gracefully
-        if not self.check_health(url) and self.check_health(self.base_url):
-            return self.base_url, self.model_family
+        t0 = time.time()
+        error = None
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                content, tokens = parse(json.load(resp))
+        except (OSError, ValueError, KeyError, IndexError) as e:
+            content, tokens, error = "", 0, str(e)
+        elapsed = time.time() - t0
+        return {
+            "success": error is None,
+            "error": error,
+            "model": model,
+            "content": content,
+            "tokens": tokens,
+            "elapsed_sec": round(elapsed, 3),
+            "tokens_per_sec": round(tokens / elapsed, 2) if elapsed else 0.0,
+        }
 
-        return url, plan["id"]
-
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.0,
-        max_tokens: int = 600,
-        response_format: Optional[Dict[str, Any]] = None,
-        grammar: Optional[str] = None,
-        task_intent: str = "code",
-        is_retry: bool = False,
-        enable_thinking: Optional[bool] = None,
-        target_model: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Sends chat completion request to the auto-selected or specified model server.
-        Supports native thinking resolution and chat_template_kwargs toggling.
-        """
-        last_prompt = messages[-1].get("content", "") if messages else ""
+    def chat(self, messages: List[Dict[str, str]], max_tokens=600, response_format=None, task_intent="code",
+             enable_thinking: Optional[bool] = None, model: Optional[str] = None) -> Dict[str, Any]:
+        """OpenAI-style chat. Thinking follows AutoThinkingPolicy and the model follows resolve_model unless given."""
         if enable_thinking is None:
-            enable_thinking = self.policy.resolve(
-                mode=self.thinking_mode,
-                task_intent=task_intent,
-                has_schema=bool(response_format),
-                is_retry=is_retry,
-                prompt=last_prompt
-            )
-
-        active_url, resolved_model = self.get_active_url(
-            target_model=target_model,
-            task_intent=task_intent,
-            context_needed=max_tokens * 2,
-            prompt=last_prompt
-        )
-
-        payload: Dict[str, Any] = {
-            "model": self.model,
+            enable_thinking = AutoThinkingPolicy.resolve(self.thinking_mode, task_intent, bool(response_format))
+        payload = {
             "messages": messages,
-            "temperature": temperature,
+            "temperature": 0.0,
             "max_tokens": max_tokens,
-            "stream": False,
-            "chat_template_kwargs": {"enable_thinking": enable_thinking}
+            "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if response_format:
             payload["response_format"] = response_format
-        if grammar:
-            payload["grammar"] = grammar
-
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{active_url}/v1/chat/completions",
-            data=data,
-            headers={"Content-Type": "application/json"}
+        return self._post(
+            model or self.resolve_model(task_intent, max_tokens * 2),
+            "/v1/chat/completions",
+            payload,
+            lambda b: ((b["choices"][0]["message"].get("content") or "").strip(), b.get("usage", {}).get("completion_tokens", 0)),
         )
 
-        t0 = time.time()
+    def chat_json(self, messages: List[Dict[str, str]], schema: Dict[str, Any], max_tokens=300) -> Optional[Dict[str, Any]]:
+        """Chat constrained to a JSON schema. Returns the parsed object, or None on failure."""
+        res = self.chat(messages, max_tokens, response_format={"type": "json_object", "schema": schema})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw_body = resp.read().decode("utf-8")
-                res = json.loads(raw_body)
-                elapsed = time.time() - t0
+            return json.loads(res["content"])
+        except ValueError:
+            return None
 
-                choice = res.get("choices", [{}])[0]
-                msg = choice.get("message", {})
-                content = msg.get("content", "").strip()
-                reasoning = msg.get("reasoning_content", "")
-                
-                usage = res.get("usage", {})
-                completion_tokens = usage.get("completion_tokens", 0)
-                tok_per_sec = (completion_tokens / elapsed) if elapsed > 0 else 0.0
-
-                return {
-                    "success": True,
-                    "content": content,
-                    "reasoning": reasoning,
-                    "model_used": resolved_model,
-                    "active_url": active_url,
-                    "elapsed_sec": round(elapsed, 3),
-                    "tokens": completion_tokens,
-                    "tokens_per_sec": round(tok_per_sec, 2),
-                    "error": None
-                }
-        except Exception as e:
-            elapsed = time.time() - t0
-            return {
-                "success": False,
-                "content": "",
-                "reasoning": "",
-                "model_used": resolved_model,
-                "active_url": active_url,
-                "elapsed_sec": round(elapsed, 3),
-                "tokens": 0,
-                "tokens_per_sec": 0.0,
-                "error": str(e)
-            }
-
-    def completion(
-        self,
-        prompt: str,
-        n_predict: int = 500,
-        temperature: float = 0.0,
-        stop: Optional[List[str]] = None,
-        task_intent: str = "code",
-        target_model: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Direct native completion endpoint with prefix pre-filling support.
-        Automatically routes micro-patching to LFM3 (sub-second) and complex reasoning to Spark.
-        """
-        is_micro = (n_predict <= 300 and ("assert" not in prompt.lower()))
-        active_url, resolved_model = self.get_active_url(
-            target_model=target_model,
-            task_intent=task_intent,
-            context_needed=n_predict * 2,
-            is_micro_patch=is_micro,
-            prompt=prompt
+    def completion(self, prompt: str, n_predict: int, stop: List[str]) -> Dict[str, Any]:
+        """Raw LFM3 /completion call, used for pre-filled ChatML prompts."""
+        return self._post(
+            "lfm3",
+            "/completion",
+            {"prompt": prompt, "n_predict": n_predict, "temperature": 0.0, "stop": stop},
+            lambda b: (b["content"], b.get("tokens_predicted", 0)),
         )
 
-        payload: Dict[str, Any] = {
-            "prompt": prompt,
-            "n_predict": n_predict,
-            "temperature": temperature,
-            "stream": False
-        }
-        if stop:
-            payload["stop"] = stop
-        else:
-            payload["stop"] = ["```", "<|im_end|>", "<|endoftext|>"]
-
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{active_url}/completion",
-            data=data,
-            headers={"Content-Type": "application/json"}
-        )
-
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                res = json.loads(resp.read().decode("utf-8"))
-                elapsed = time.time() - t0
-                content = res.get("content", "")
-                tokens = res.get("tokens_predicted", 0)
-                tok_per_sec = (tokens / elapsed) if elapsed > 0 else 0.0
-                return {
-                    "success": True,
-                    "content": content,
-                    "model_used": resolved_model,
-                    "active_url": active_url,
-                    "tokens": tokens,
-                    "elapsed_sec": round(elapsed, 3),
-                    "tokens_per_sec": round(tok_per_sec, 2),
-                    "error": None
-                }
-        except Exception as e:
-            elapsed = time.time() - t0
-            return {
-                "success": False,
-                "content": "",
-                "model_used": resolved_model,
-                "active_url": active_url,
-                "tokens": 0,
-                "elapsed_sec": round(elapsed, 3),
-                "tokens_per_sec": 0.0,
-                "error": str(e)
-            }
-
-    def chat_structured(
-        self,
-        messages: List[Dict[str, str]],
-        schema: Dict[str, Any],
-        max_tokens: int = 300
-    ) -> Dict[str, Any]:
+    def generate_code(self, model: str, system: str, user: str, instruction: str, prefill="", think=False,
+                      max_tokens=450) -> Tuple[str, Dict[str, Any]]:
         """
-        Structured JSON decoding using llama-server's native JSON Schema support.
+        Asks for corrected code and returns (code, raw result).
+        Spark gets a chat request with `instruction` appended. LFM3 gets a ChatML prompt whose assistant turn is
+        pre-filled with an open code block and `prefill`, or with an open <think> block (and twice the tokens) when
+        `think` is set.
         """
-        res = self.chat(
-            messages=messages,
-            temperature=0.0,
-            max_tokens=max_tokens,
-            response_format={
-                "type": "json_object",
-                "schema": schema
-            }
-        )
-        if not res["success"]:
-            return {"success": False, "valid_json": False, "parsed": None, "error": res["error"]}
+        if model == "spark":
+            messages = [{"role": "system", "content": system}, {"role": "user", "content": f"{user}\n\n{instruction}"}]
+            res = self.chat(messages, max_tokens, enable_thinking=think, model="spark")
+            return extract_code(res["content"]), res
 
-        content = res["content"]
-        # If content is empty because reasoning_content absorbed output, check reasoning
-        if not content and res.get("reasoning"):
-            import re
-            m = re.search(r"\{.*\}", res["reasoning"], re.DOTALL)
-            if m:
-                content = m.group(0)
+        turns = f"<|im_start|>system\n{system}\n<|im_end|>\n<|im_start|>user\n{user}\n<|im_end|>\n<|im_start|>assistant\n"
+        if not think:
+            res = self.completion(f"{turns}```python\n{prefill}", max_tokens, ["```", "<|im_end|>", "<|endoftext|>"])
+            return prefill + res["content"], res
 
-        try:
-            parsed = json.loads(content)
-            if isinstance(parsed, dict):
-                import re
-                clean_parsed = {}
-                for k, v in parsed.items():
-                    if isinstance(v, str):
-                        # Strip trailing markdown codeblock delimiter or extra JSON characters if accidentally emitted
-                        if "'" in v or "`" in v or "\n" in v:
-                            v_clean = re.split(r"['\"`\s\(\)\{\}]", v)[0].strip()
-                            clean_parsed[k] = v_clean if v_clean else v.strip()
-                        else:
-                            clean_parsed[k] = v.strip()
-                    else:
-                        clean_parsed[k] = v
-                parsed = clean_parsed
-            return {"success": True, "valid_json": True, "parsed": parsed, "raw": content, "elapsed_sec": res["elapsed_sec"]}
-        except Exception as e:
-            return {"success": False, "valid_json": False, "parsed": None, "raw": content, "error": str(e), "elapsed_sec": res["elapsed_sec"]}
+        res = self.completion(f"{turns}<think>\n", max_tokens * 2, ["<|im_end|>", "<|endoftext|>"])
+        code = extract_code(res["content"])
+        if prefill.startswith("def ") and not code.startswith("def "):
+            code = f"{prefill}\n{code}"
+        return code, res

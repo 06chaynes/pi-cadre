@@ -1,79 +1,52 @@
 @echo off
-REM High-Performance llama-server launcher for Windows (CUDA/Vulkan/CPU)
-setlocal enabledelayedexpansion
-
-set SCRIPT_DIR=%~dp0
-set PROJECT_DIR=%SCRIPT_DIR%..
-
-IF EXIST "%PROJECT_DIR%\lfm3_config.env" (
-    FOR /F "tokens=1,2 delims==" %%G IN (%PROJECT_DIR%\lfm3_config.env) DO (
-        SET %%G=%%H
-    )
+REM Starts llama-server using lfm3_config.env (see that file for MODEL values). Flags override the config.
+setlocal
+set "PROJECT_DIR=%~dp0.."
+if exist "%PROJECT_DIR%\lfm3_config.env" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%G in ("%PROJECT_DIR%\lfm3_config.env") do set "%%G=%%H"
 )
 
-IF "%PORT%"=="" SET PORT=8080
-IF "%HOST%"=="" SET HOST=127.0.0.1
-IF "%MODEL_ID%"=="" SET MODEL_ID=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M
-IF "%PARALLEL_SLOTS%"=="" SET PARALLEL_SLOTS=16
-IF "%N_GPU_LAYERS%"=="" SET N_GPU_LAYERS=99
-IF "%CTX_SIZE%"=="" SET CTX_SIZE=32768
-
-:parse_args
-IF "%~1"=="" GOTO done_args
-IF /I "%~1"=="-c" (
-    SET CTX_SIZE=%~2
-    SHIFT & SHIFT
-    GOTO parse_args
-)
-IF /I "%~1"=="--ctx-size" (
-    SET CTX_SIZE=%~2
-    SHIFT & SHIFT
-    GOTO parse_args
-)
-IF /I "%~1"=="-np" (
-    SET PARALLEL_SLOTS=%~2
-    SHIFT & SHIFT
-    GOTO parse_args
-)
-IF /I "%~1"=="--parallel" (
-    SET PARALLEL_SLOTS=%~2
-    SHIFT & SHIFT
-    GOTO parse_args
-)
-IF /I "%~1"=="-p" (
-    SET PORT=%~2
-    SHIFT & SHIFT
-    GOTO parse_args
-)
-IF /I "%~1"=="-h" (
-    echo Usage: %~nx0 [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT]
-    echo   -c,  --ctx-size  Total KV cache pool (e.g. 32768, 65536, 131072, 262144)
-    echo   -np, --parallel  Number of concurrent parallel slots (default: 16)
-    exit /b 0
-)
-SHIFT
-GOTO parse_args
-
-:done_args
-SET /A PER_SLOT_CTX=%CTX_SIZE% / %PARALLEL_SLOTS%
-
-echo ==========================================================
-echo  Starting llama-server with LFM3-1.7B-GGUF (Windows)
-echo  Host:            %HOST%:%PORT%
-echo  Model:           %MODEL_ID%
-echo  Parallel Slots:  %PARALLEL_SLOTS% slots
-echo  GPU Offload:     %N_GPU_LAYERS% layers
-echo  Context Pool:    %CTX_SIZE% tokens
-echo  Slot Capacity:   ~%PER_SLOT_CTX% tokens/slot
-echo  Model Max Train: 262,144 tokens (256k)
-echo ==========================================================
-
-WHERE llama-server >nul 2>nul
-IF %ERRORLEVEL% NEQ 0 (
-    echo ERROR: llama-server executable not found in PATH.
-    echo Please install llama.cpp or run: python setup_wizard.py
-    pause
+:args
+if "%~1"=="" goto run
+if /i "%~1"=="-m" (set "MODEL=%~2") else if /i "%~1"=="-c" (set "CTX_SIZE=%~2") else if /i "%~1"=="-np" (set "PARALLEL_SLOTS=%~2") else if /i "%~1"=="-p" (set "PORT=%~2") else if /i "%~1"=="-ngl" (set "N_GPU_LAYERS=%~2") else (
+    echo Usage: %~nx0 [-m dual^|spark^|lfm3^|HF_ID^|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS]
     exit /b 1
 )
+shift
+shift
+goto args
 
-llama-server.exe -hf "%MODEL_ID%" --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja
+:run
+where llama-server >nul 2>nul || (
+    echo llama-server not found in PATH. Install llama.cpp or run: python setup_wizard.py
+    exit /b 1
+)
+if not defined MODEL set MODEL=dual
+
+if /i "%MODEL%"=="dual" (
+    start "Spark-X2.6-4B" cmd /k ""%~f0" -m spark -c "" -np "" -p """
+    start "LFM3-1.7B" cmd /k ""%~f0" -m lfm3 -c "" -np "" -p """
+    exit /b 0
+)
+
+set "DEFAULTS=8080 32768 8"
+set SOURCE=-hf "%MODEL%"
+if /i "%MODEL:~-5%"==".gguf" set SOURCE=-m "%MODEL%"
+if /i "%MODEL%"=="lfm3" (
+    set "DEFAULTS=8081 32768 16"
+    set SOURCE=-hf LiquidAI/LFM3-1.7B-GGUF:Q4_K_M
+)
+if /i "%MODEL%"=="spark" (
+    set "DEFAULTS=8080 65536 8"
+    set SOURCE=-hf XHToken/Spark-X2.6-4B-GGUF:Q4_K_M
+    if exist "%PROJECT_DIR%\models\Spark-X2.6-4B-Q4_K_M.gguf" set SOURCE=-m "%PROJECT_DIR%\models\Spark-X2.6-4B-Q4_K_M.gguf"
+)
+for /f "tokens=1-3" %%a in ("%DEFAULTS%") do (
+    if not defined PORT set PORT=%%a
+    if not defined CTX_SIZE set CTX_SIZE=%%b
+    if not defined PARALLEL_SLOTS set PARALLEL_SLOTS=%%c
+)
+if not defined HOST set HOST=127.0.0.1
+if not defined N_GPU_LAYERS set N_GPU_LAYERS=99
+
+llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja

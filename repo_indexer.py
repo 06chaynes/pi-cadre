@@ -1,233 +1,109 @@
-"""
-Stage 1 & 2 Engine: Deterministic Traceback Slicer + AST Symbol Graph Indexer.
-Extracts failing frames from pytest runs and builds a symbol map of all functions,
-classes, and docstrings across the entire repository.
-Cost: 0 LLM Tokens!
-"""
+"""AST helpers for locating and slicing functions in a repository without spending model tokens."""
 
-import os
 import ast
-import subprocess
-import sys
-from typing import Dict, Any, List, Optional, Tuple
+import os
+import re
+import textwrap
+from typing import Any, Dict, List, Tuple
+
+
+def words(text: str) -> set:
+    return {w.lower() for w in re.split(r"[\s_.]+", text) if len(w) > 2}
+
 
 class RepoASTIndexer:
     def __init__(self, repo_root: str):
         self.repo_root = os.path.abspath(repo_root)
 
+    def _parse(self, rel_path: str) -> Tuple[List[str], ast.Module]:
+        with open(os.path.join(self.repo_root, rel_path), encoding="utf-8") as fp:
+            source = fp.read()
+        return source.splitlines(True), ast.parse(source)
+
+    @staticmethod
+    def _find_function(tree: ast.AST, name: str) -> ast.AST:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                return node
+        raise ValueError(f"Function {name} not found")
+
     def scan_symbols(self) -> List[Dict[str, Any]]:
+        """Lists every function and class in the repository with its file, line span, and docstring."""
         symbols = []
         for root, _, files in os.walk(self.repo_root):
             for f in files:
-                if f.endswith(".py"):
-                    full_path = os.path.join(root, f)
-                    rel_path = os.path.relpath(full_path, self.repo_root)
-                    try:
-                        with open(full_path, "r", encoding="utf-8") as fp:
-                            content = fp.read()
-                            tree = ast.parse(content, filename=rel_path)
-
-                        for node in ast.walk(tree):
-                            if isinstance(node, ast.FunctionDef):
-                                symbols.append({
-                                    "type": "function",
-                                    "name": node.name,
-                                    "file": rel_path,
-                                    "start_line": node.lineno,
-                                    "end_line": getattr(node, "end_lineno", node.lineno + 25),
-                                    "docstring": ast.get_docstring(node) or ""
-                                })
-                            elif isinstance(node, ast.ClassDef):
-                                symbols.append({
-                                    "type": "class",
-                                    "name": node.name,
-                                    "file": rel_path,
-                                    "start_line": node.lineno,
-                                    "end_line": getattr(node, "end_lineno", node.lineno + 30),
-                                    "docstring": ast.get_docstring(node) or ""
-                                })
-                    except Exception:
-                        pass
+                if not f.endswith(".py"):
+                    continue
+                rel_path = os.path.relpath(os.path.join(root, f), self.repo_root)
+                try:
+                    _, tree = self._parse(rel_path)
+                except (SyntaxError, UnicodeDecodeError):
+                    continue
+                symbols.extend(
+                    {
+                        "name": node.name,
+                        "file": rel_path,
+                        "start_line": node.lineno,
+                        "end_line": node.end_lineno,
+                        "docstring": ast.get_docstring(node) or "",
+                    }
+                    for node in ast.walk(tree)
+                    if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                )
         return symbols
 
-    def run_reproducer_and_slice(self, test_script: str) -> Optional[Dict[str, Any]]:
-        """
-        Runs the test script and automatically slices the bottom-most stack frame.
-        """
-        env = dict(os.environ)
-        env["PYTHONPATH"] = self.repo_root
-        res = subprocess.run(
-            [sys.executable, test_script],
-            capture_output=True,
-            text=True,
-            env=env
-        )
-
-        if res.returncode == 0:
-            return None # Passed, no bug found
-
-        stderr = res.stderr or res.stdout
-        lines = stderr.splitlines()
-
-        # Find the last stack frame inside the repo
-        target_file = None
-        target_line = None
-        for l in reversed(lines):
-            if 'File "' in l and self.repo_root in l:
-                # e.g. File ".../separable.py", line 15, in ...
-                parts = l.strip().split('"')
-                if len(parts) >= 2:
-                    target_file = os.path.relpath(parts[1], self.repo_root)
-                    if "line " in l:
-                        target_line = int(l.split("line ")[1].split(",")[0].strip())
-                    break
-
-        return {
-            "exit_code": res.returncode,
-            "error_tail": "\n".join(lines[-4:]),
-            "target_file": target_file,
-            "target_line": target_line
-        }
-
-    def get_source_slice(self, rel_path: str, start_line: int, end_line: int) -> str:
-        full_path = os.path.join(self.repo_root, rel_path)
-        with open(full_path, "r", encoding="utf-8") as fp:
-            lines = fp.readlines()
-        
-        # Zero-indexed slice
-        start_idx = max(0, start_line - 1)
-        end_idx = min(len(lines), end_line)
-        return "".join(lines[start_idx:end_idx])
-
-    def get_adaptive_source_slice(
-        self,
-        rel_path: str,
-        function_name: str,
-        issue_description: str,
-        max_lines: int = 35
-    ) -> Tuple[str, int, int, bool]:
-        """
-        Adaptive AST Slicer.
-        If function <= max_lines, returns entire function.
-        If function > max_lines, searches child AST blocks (While, For, If, Try, With)
-        and scores them against issue keywords, returning the top focused window.
-        """
-        import re
-        full_path = os.path.join(self.repo_root, rel_path)
-        with open(full_path, "r", encoding="utf-8") as fp:
-            code_lines = fp.readlines()
-        full_content = "".join(code_lines)
-        tree = ast.parse(full_content)
-
-        target_node = None
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
-                target_node = node
-                break
-
-        if not target_node:
-            return "".join(code_lines[:max_lines]), 1, min(len(code_lines), max_lines), False
-
-        fn_start = target_node.lineno
-        fn_end = getattr(target_node, "end_lineno", fn_start + 25)
-        total_lines = fn_end - fn_start + 1
-
-        if total_lines <= max_lines:
-            return "".join(code_lines[fn_start - 1 : fn_end]), fn_start, fn_end, False
-
-        # Function exceeds max_lines -> traverse child blocks
-        query_words = set(w.lower() for w in re.split(r"[\s_.]+", issue_description) if len(w) > 2)
-        candidates = []
-
-        for child in ast.walk(target_node):
-            if child is target_node:
-                continue
-            if isinstance(child, (ast.While, ast.For, ast.If, ast.Try, ast.With)):
-                c_start = child.lineno
-                c_end = getattr(child, "end_lineno", c_start + 5)
-                block_lines = code_lines[c_start - 1 : c_end]
-                block_text = "".join(block_lines)
-                block_words = set(w.lower() for w in re.split(r"[\s_.]+", block_text) if len(w) > 2)
-                score = len(query_words.intersection(block_words))
-                candidates.append((score, c_start, c_end, c_end - c_start + 1))
-
-        candidates.sort(key=lambda x: (x[0], -x[3]), reverse=True)
-
-        if candidates and candidates[0][0] > 0:
-            _, best_s, best_e, span = candidates[0]
-            if span <= max_lines:
-                lead = min(6, best_s - fn_start)
-                win_start = best_s - lead
-                win_end = min(fn_end, win_start + max_lines)
-            else:
-                win_start = max(fn_start, best_e - max_lines)
-                win_end = best_e
-        else:
-            win_start = fn_start
-            win_end = min(fn_end, win_start + max_lines)
-
-        slice_text = "".join(code_lines[win_start - 1 : win_end])
-        return slice_text, win_start, win_end, True
-
     def get_module_imports(self, rel_path: str) -> List[str]:
-        """
-        Extracts all top-level module import statements via AST.
-        """
-        full_path = os.path.join(self.repo_root, rel_path)
-        with open(full_path, "r", encoding="utf-8") as fp:
-            tree = ast.parse(fp.read())
+        _, tree = self._parse(rel_path)
         return [ast.unparse(n) for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
 
     def get_clean_function_context(self, rel_path: str, function_name: str) -> Dict[str, Any]:
-        """
-        Extracts AST-clean function context:
-        - Strips distracting multi-line English docstrings to prevent token drift in 1.7B models
-        - Isolates function signature and base indentation level
-        - Gathers visible module imports to eliminate hallucinated imports
-        """
-        import textwrap
-        full_path = os.path.join(self.repo_root, rel_path)
-        with open(full_path, "r", encoding="utf-8") as fp:
-            full_code = fp.read()
-        file_lines = full_code.splitlines(True)
-        file_tree = ast.parse(full_code)
+        """Returns the dedented function without its docstring, plus its signature line, base indent, and line span."""
+        lines, tree = self._parse(rel_path)
+        node = self._find_function(tree, function_name)
+        raw = lines[node.lineno - 1:node.end_lineno]
+        dedented = textwrap.dedent("".join(raw))
 
-        target_node = None
-        for node in ast.walk(file_tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
-                target_node = node
-                break
-
-        if not target_node:
-            raise ValueError(f"Function {function_name} not found in {rel_path}")
-
-        fn_start = target_node.lineno
-        fn_end = getattr(target_node, "end_lineno", fn_start + 25)
-        raw_lines = file_lines[fn_start - 1 : fn_end]
-        raw_code = "".join(raw_lines)
-
-        base_indent = len(raw_lines[0]) - len(raw_lines[0].lstrip())
-        dedented = textwrap.dedent(raw_code)
-
-        # Parse dedented node to cleanly remove docstring
-        parsed_fn = ast.parse(dedented).body[0]
-        doc = ast.get_docstring(parsed_fn)
-        if doc and len(parsed_fn.body) > 1:
-            doc_node = parsed_fn.body[0]
+        parsed = ast.parse(dedented).body[0]
+        if ast.get_docstring(parsed) and len(parsed.body) > 1:
+            doc = parsed.body[0]
             d_lines = dedented.splitlines(True)
-            clean_fn = "".join(d_lines[:doc_node.lineno - 1] + d_lines[doc_node.end_lineno:])
-        else:
-            clean_fn = dedented
-
-        signature = clean_fn.strip().splitlines()[0]
-        imports = self.get_module_imports(rel_path)
+            dedented = "".join(d_lines[:doc.lineno - 1] + d_lines[doc.end_lineno:])
 
         return {
-            "clean_code": clean_fn.strip(),
-            "docstring": doc,
-            "signature": signature,
-            "base_indent": base_indent,
-            "start_line": fn_start,
-            "end_line": fn_end,
-            "module_imports": "\n".join(imports)
+            "clean_code": dedented.strip(),
+            "signature": dedented.strip().splitlines()[0],
+            "base_indent": len(raw[0]) - len(raw[0].lstrip()),
+            "start_line": node.lineno,
+            "end_line": node.end_lineno,
         }
+
+    def get_adaptive_source_slice(self, rel_path: str, function_name: str, issue: str, max_lines=35) -> Tuple[str, int, int]:
+        """
+        Returns (source, start_line, end_line) of at most max_lines from the function.
+        Longer functions are narrowed to the loop/branch/try/with block sharing the most words with `issue`.
+        """
+        lines, tree = self._parse(rel_path)
+        fn = self._find_function(tree, function_name)
+        start, end = fn.lineno, fn.end_lineno
+        if end - start + 1 <= max_lines:
+            return "".join(lines[start - 1:end]), start, end
+
+        query = words(issue)
+        blocks = [
+            (len(query & words("".join(lines[c.lineno - 1:c.end_lineno]))), c.lineno, c.end_lineno)
+            for c in ast.walk(fn)
+            if c is not fn and isinstance(c, (ast.While, ast.For, ast.If, ast.Try, ast.With))
+        ]
+        blocks.sort(key=lambda b: (b[0], b[1] - b[2]), reverse=True)
+
+        if blocks and blocks[0][0] > 0:
+            _, b_start, b_end = blocks[0]
+            if b_end - b_start + 1 <= max_lines:
+                start = b_start - min(6, b_start - start, max_lines - (b_end - b_start + 1))
+                end = min(end, start + max_lines)
+            else:
+                start = max(start, b_end - max_lines)
+                end = b_end
+        else:
+            end = min(end, start + max_lines)
+        return "".join(lines[start - 1:end]), start, end

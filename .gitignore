@@ -10,7 +10,7 @@ __pycache__/
 *$py.class
 .pytest_cache/
 
-# Large External Cloned Codebases (can be cloned as needed)
+# psf/requests clone used by the benchmark battery (see README)
 requests_repo/
 
 # OS-Specific Files
@@ -25,3 +25,6 @@ scratch/
 # Local model weights
 models/
 *.gguf
+
+# Benchmark outputs
+results/

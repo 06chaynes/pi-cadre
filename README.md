@@ -1,145 +1,120 @@
-# Pi & LiquidAI LFM3 1.7B Swarm Framework
+# pi-lfm3
 
-A production-grade, reproducible framework and cross-platform coding assistant integration for **LiquidAI LFM3 1.7B** (`LiquidAI/LFM3-1.7B-GGUF:Q4_K_M`) coupled with **Pi Coding Agent** (`@earendil-works/pi-coding-agent`).
+Runs the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) against local GGUF models served by `llama.cpp`:
 
-- **Primary Backend:** `llama.cpp` (`llama-server`, 42.1 tok/s, GPU acceleration via Metal/CUDA, 4 parallel slots)
-- **Alternative Backend:** `Ollama` (`lfm3:latest`, 31.7 tok/s)
-- **Auto-Thinking Policy:** Dynamically switches `<think>` tokens on or off based on task intent, schema constraints, and traceback retry telemetry.
-- **Full Test Battery Pass Rate:** **15 / 15 (100.0%)** across Auto-Thinking Policy verification, production repository benchmarks (`psf/requests` 15,000 LOC), and multi-repo SWE-Bench Lite tasks.
+- **Spark-X2.6-4B** (`XHToken/Spark-X2.6-4B-GGUF:Q4_K_M`) on port 8080
+- **LFM3-1.7B** (`LiquidAI/LFM3-1.7B-GGUF:Q4_K_M`) on port 8081
 
----
+Ollama (`lfm3:latest`) is supported as an alternative backend for LFM3.
 
-## ⚡ 1-Click Guided Installation Wizard
+The repository also contains a Python client that routes requests between the two models, and a benchmark battery that uses it.
 
-A portable, interactive wizard installs and configures the inference backend (`llama.cpp` or `ollama`), the LFM3 GGUF model, Pi Coding Agent, and deploys all foundational customizations.
+> ### Disclaimer: please read
+>
+> **This project was built with heavy assistance from AI coding agents.** It has been reviewed, but AI-written code
+> can still contain subtle defects, missed edge cases, or security assumptions that weren't obvious to the reviewer.
+> Treat it as experimental software.
+>
+> **It is designed to run locally on your own machine.** The launchers bind `llama-server` to `127.0.0.1` with no
+> authentication, and the Pi provider uses the placeholder API key `none`.
+>
+> - Do not set `HOST` to a network address or expose the servers through a proxy or tunnel. Anything that can reach
+>   the port can use the models.
+> - The setup wizard edits `~/.pi/agent/models.json` and `settings.json`, and can install packages with npm, Homebrew,
+>   or Ollama. Run it with `--dry-run` first to see what it will change.
+> - The benchmark battery modifies files in, and runs tests from, the `requests_repo/` clone. Point it only at a
+>   checkout you are willing to have reset with `git checkout -f`.
 
-### macOS & Linux
-```bash
-./install.sh
-```
-*(or `python3 setup_wizard.py`)*
-
-### Windows (PowerShell or Command Prompt)
-```powershell
-.\install.ps1
-```
-*(or `install.bat` / `python setup_wizard.py`)*
-
-### Unattended / CI Mode
-```bash
-# Automated install using llama.cpp as default backend
-python3 setup_wizard.py --unattended --backend llama.cpp
-
-# Or preview actions without writing
-python3 setup_wizard.py --dry-run
-```
-
----
-
-## 🚀 Running the Stack
-
-### 1. Start the Inference Server
-```bash
-# macOS / Linux
-./launchers/start_llama_server.sh
-
-# Windows
-.\launchers\start_llama_server.bat
-```
-This boots `llama-server` on `http://127.0.0.1:8080` with `--parallel 4 -ngl 99 --ctx-size 8192` and downloads/serves `LiquidAI/LFM3-1.7B-GGUF:Q4_K_M`.
-
-### 2. Launch Pi with LFM3 Optimizations
-```bash
-# macOS / Linux
-./launchers/pi_lfm3.sh
-
-# Windows
-.\launchers\pi_lfm3.bat
-```
-
-Inside Pi interactive chat:
-- `/lfm3-status` — check backend connection latency, model status, and memory.
-- `/lfm3-thinking auto` — toggle between `auto`, `off`, `low`, `medium`, or `high`.
-
----
-
-## 🧠 Foundational Optimizations
-
-Unlike brittle per-test workarounds, this framework applies 4 foundational architectural improvements engineered specifically for the LFM3 1.7B architecture:
-
-```mermaid
-flowchart TD
-    UserReq["User Request / Repo Task"] --> Policy["AutoThinkingPolicy"]
-    Policy -->|Intent == Code / Micro-Edit| Prefix["Prefix Pre-Filling (<|im_start|>assistant\n```python\n{sig})"]
-    Policy -->|Intent == Diagnosis / Traceback Retry| Think["Reasoning Activated (<think>)"]
-    Prefix --> LFM3["LFM3 1.7B GGUF Model"]
-    Think --> LFM3
-    LFM3 --> AST_Strip["AST Docstring Stripping"]
-    AST_Strip --> AST_San["AST Inner-Import Sanitizer"]
-    AST_San --> Indent["Relative Indentation Preserver"]
-    Indent --> AST_Gate{"In-Memory AST Gate"}
-    AST_Gate -->|Valid AST| Apply["Atomic Disk Patch & Pytest"]
-    AST_Gate -->|Syntax Error| Retry["Feedback Loop to LFM3"]
-```
-
-1. **Auto-Thinking Policy (`AutoThinkingPolicy`):**
-   - **Code Synthesis & Micro-Editing:** Thinking is automatically disabled and steered via Prefix Pre-Filling to bypass token budget exhaustion and achieve instant code delivery in <300ms.
-   - **GBNF / JSON Schema Decoding:** Thinking is disabled to enforce strict, immediate first-token JSON compliance.
-   - **Error Tracebacks & Diagnostic Retries:** Reasoning is dynamically activated (`<think>`) when assertion errors or complex traceback regressions are encountered.
-2. **Prefix Pre-Filling:**
-   - Pre-fills the assistant turn with `<|im_start|>assistant\n```python\n{signature}`. This eliminates repetitive conversational preambles ("Certainly! Here is...") and guarantees syntactic alignment with the target module.
-3. **AST Docstring Stripping & Module-Bound Context:**
-   - Strips multi-line docstrings from injected dependencies to reduce prompt bloat by ~50% while preserving exact type signatures and caller contracts.
-4. **AST Inner-Import Sanitizer & Relative Indentation:**
-   - Traverses the generated function AST to strip hallucinated imports introduced into local function scopes, and normalizes indentation relative to the caller scope before committing changes.
-
----
-
-## 📊 Verification & Test Battery Results
-
-Run the complete 15-task battery against `llama-server`:
+## Install
 
 ```bash
-python3 run_full_battery_eval.py
+./install.sh                # macOS / Linux, same as: python3 setup_wizard.py
+install.bat                 # Windows, same as: python setup_wizard.py
 ```
 
-### Full Battery Scorecard:
-| Test Suite | Focus Area | Tasks | Pass Rate | Runtime |
-|---|---|:---:|:---:|:---:|
-| **Suite A** | Auto-Thinking Policy & Decision Logic | 6 | **100.0%** (6/6) | 0.05s |
-| **Suite B** | Real-World Codebase (`psf/requests` 15,000 LOC) | 4 | **100.0%** (4/4) | 24.38s |
-| **Suite C** | Multi-Repo SWE-Bench Lite (Django, Pytest, Requests, Astropy) | 5 | **100.0%** (5/5) | 4.01s |
-| **Composite** | **All Benchmark Suites** | **15** | **100.0% (15/15)** | **28.39s** |
+The wizard:
 
-### Speed Comparison: llama.cpp vs Ollama
-| Metric | Ollama (`lfm3:latest`) | llama.cpp (`LFM3-1.7B-GGUF`) | Delta |
-|---|:---:|:---:|:---:|
-| **Generation Speed** | 31.7 tok/s | **42.1 tok/s** | **+32.8% faster** |
-| **Slot Concurrency** | 1 sequential slot | **4 parallel slots** | **4x throughput** |
-| **First Token Latency** | ~450ms | **~120ms** | **3.75x lower** |
+1. Asks for a backend: llama.cpp (default) or Ollama.
+2. Installs Pi with npm if it is missing.
+3. Asks for a server profile and writes it to `lfm3_config.env`.
+4. Registers both models and `pi_extensions/lfm3_agent_extension.ts` in `~/.pi/agent/models.json` and `settings.json`. `PI_CODING_AGENT_DIR` overrides the directory.
 
----
+Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
-## 📁 Repository Structure
+## Run
 
-```text
-├── setup_wizard.py               # Cross-platform guided installer wizard
-├── install.sh                    # POSIX bootstrap launcher (macOS & Linux)
-├── install.bat / install.ps1     # Windows bootstrap launchers (CMD & PowerShell)
-├── pi_extensions/
-│   └── lfm3_agent_extension.ts   # Pi Coding Agent custom optimization extension
-├── launchers/
-│   ├── start_llama_server.sh/bat # Optimized llama-server launcher
-│   ├── start_ollama.sh/bat       # Ollama service launcher
-│   └── pi_lfm3.sh/bat            # Pre-configured Pi launch wrapper
-├── llama_cpp_client.py           # AutoThinkingPolicy & high-performance GGUF client
-├── repo_indexer.py               # AST docstring stripper & dependency slicer
-├── run_full_battery_eval.py      # 15-task full test battery runner
-├── run_llama_cpp_repo_benchmark.py # Production requests repository benchmark
-└── run_swe_bench_mini.py         # Multi-repo SWE-Bench Lite evaluation
+```bash
+./launchers/start_llama_server.sh       # Windows: launchers\start_llama_server.bat
+./launchers/pi_lfm3.sh                  # Windows: launchers\pi_lfm3.bat; ./pi-lfm3 is a shortcut
 ```
 
----
+`MODEL` in `lfm3_config.env` controls both launchers:
+
+| `MODEL` | Server | Pi uses |
+|---|---|---|
+| `dual` | Spark on 8080 and LFM3 on 8081 | Spark |
+| `spark` | Spark on 8080 | Spark |
+| `lfm3` | LFM3 on 8081 | LFM3 |
+| HF repo ID or `.gguf` path | that model on `PORT` (default 8080) | Spark entry on 8080 |
+
+Command-line flags override the config; run `start_llama_server.sh --help` to list them. If `models/Spark-X2.6-4B-Q4_K_M.gguf` exists, it is used instead of downloading Spark from Hugging Face.
+
+With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
+
+Pi commands added by the extension:
+
+- `/lfm3-status`: backend health, loaded model, and context size.
+- `/lfm3-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, or diagnosis run with medium thinking, and all others run with thinking off.
+
+## Python client
+
+`llama_cpp_client.py` provides:
+
+- `AutoThinkingPolicy`: turns thinking off for code and JSON-schema output, and on for diagnosis, planning, and retries after a test failure.
+- `AutoModelPolicy`: sends short patching and scouting tasks to LFM3 and everything else to Spark. In `auto` mode the client falls back to whichever server is running.
+- `LlamaCppClient.generate_code`: Spark gets a chat request. LFM3 gets a ChatML prompt whose assistant turn is pre-filled with a code fence and the function signature.
+
+## Tests
+
+```bash
+pip install pytest
+python3 -m pytest
+```
+
+The tests need no model server. They cover the routing policies, client request construction, AST helpers, the wizard's config writing, and the shell launchers (using stub binaries). CI runs them on Linux, macOS, and Windows (`.github/workflows/test.yml`).
+
+## Benchmarks
+
+```bash
+git clone --branch v2.31.0 https://github.com/psf/requests requests_repo
+pip install -r requests_repo/requirements-dev.txt -e requests_repo
+python3 run_full_battery_eval.py [--model auto|spark|lfm3]
+python3 benchmark_parallel_slots.py [--port 8081]
+```
+
+The battery runs two suites:
+
+- **B:** four defects injected into `requests`, each checked by its tests. See `repo_benchmark.py`.
+- **C:** five SWE-bench Lite snippets, scored by whether the expected fix text appears and the output parses.
+
+Results go to `results/`.
+
+Each task description in B and C states the fix. C passes when that exact text appears in the output. These suites therefore measure whether the model applies a described fix, not whether it can find one.
+
+## Layout
+
+| Path | Purpose |
+|---|---|
+| `setup_wizard.py`, `install.sh`, `install.bat` | Installer |
+| `lfm3_config.env` | Server settings read by the launchers |
+| `launchers/` | Server and Pi launchers |
+| `pi_extensions/lfm3_agent_extension.ts` | Pi extension |
+| `llama_cpp_client.py` | llama-server client and routing policies |
+| `repo_indexer.py` | AST symbol scan and function slicing |
+| `benchmark_tasks.py` | Benchmark task data |
+| `repo_benchmark.py`, `run_full_battery_eval.py`, `benchmark_parallel_slots.py` | Benchmarks |
+| `tests/` | Unit tests |
 
 ## License
+
 MIT

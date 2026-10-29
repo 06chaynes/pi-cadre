@@ -1,8 +1,0 @@
-{
-  "benchmark": "4-Stage Repository Swarm",
-  "passed": false,
-  "scout_file": "astropy/modeling/separable.py",
-  "scout_function": "_separable",
-  "total_time_sec": 11.64,
-  "patch_verified": false
-}

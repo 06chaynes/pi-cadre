@@ -1,5 +1,5 @@
 @echo off
-REM Windows Command Prompt Bootstrap for Pi & LFM3 Installer
+REM Runs setup_wizard.py with Python on Windows.
 
 WHERE python >nul 2>nul
 IF %ERRORLEVEL% NEQ 0 (

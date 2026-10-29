@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# POSIX Quickstart Launcher for macOS and Linux
-# Boots setup_wizard.py with Python 3
+# Runs setup_wizard.py with Python 3 on macOS and Linux.
 
 set -e
 
-# Find Python 3
 PYTHON_BIN=""
 if command -v python3 &> /dev/null; then
     PYTHON_BIN="python3"
