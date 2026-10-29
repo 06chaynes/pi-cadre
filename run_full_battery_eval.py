@@ -18,7 +18,7 @@ import ast
 import re
 from typing import Dict, Any, List
 
-from llama_cpp_client import LlamaCppClient, AutoThinkingPolicy
+from llama_cpp_client import LlamaCppClient, AutoThinkingPolicy, AutoContextPolicy
 from repo_indexer import RepoASTIndexer
 from run_requests_repo_benchmark import TASKS, REPO_DIR, reset_repo
 from run_llama_cpp_repo_benchmark import LlamaCppBenchmarkRunner
@@ -26,7 +26,7 @@ from run_swe_bench_mini import SWE_BENCH_INSTANCES
 
 def run_suite_a_policy_verification(client: LlamaCppClient) -> Dict[str, Any]:
     print("\n" + "=" * 76)
-    print(" SUITE A: AUTO-THINKING POLICY & DECISION ENGINE VERIFICATION")
+    print(" SUITE A1: AUTO-THINKING POLICY & DECISION ENGINE VERIFICATION")
     print("=" * 76)
 
     cases = [
@@ -60,7 +60,52 @@ def run_suite_a_policy_verification(client: LlamaCppClient) -> Dict[str, Any]:
         })
 
     return {
-        "suite": "Suite A: Auto-Thinking Policy",
+        "suite": "Suite A1: Auto-Thinking Policy",
+        "passed": all_passed,
+        "total_tests": len(cases),
+        "passed_tests": sum(1 for r in results if r["passed"]),
+        "details": results
+    }
+
+def run_suite_a2_context_verification(client: LlamaCppClient) -> Dict[str, Any]:
+    print("\n" + "=" * 76)
+    print(" SUITE A2: AUTO-CONTEXT POLICY & DYNAMIC SCALING VERIFICATION")
+    print("=" * 76)
+
+    cases = [
+        {"prompt": "def add(a, b): return a + b", "intent": "code", "files": 1, "expected_ctx": 2048, "desc": "Tier 1: Micro Patch (<1.5k tok)"},
+        {"prompt": "x" * 8000, "intent": "code", "files": 1, "expected_ctx": 8192, "desc": "Tier 2: Module Context (1.5k-6k tok)"},
+        {"prompt": "x" * 30000, "intent": "call_graph", "files": 3, "expected_ctx": 32768, "desc": "Tier 3: Multi-File Call Graph"},
+        {"prompt": "x" * 120000, "intent": "architecture", "files": 8, "expected_ctx": 65536, "desc": "Tier 4: Subsystem Integration"},
+        {"prompt": "x" * 250000, "intent": "audit", "files": 25, "expected_ctx": 131072, "desc": "Tier 5: Deep Codebase"},
+        {"prompt": "x" * 1200000, "intent": "repo_wide", "files": 60, "expected_ctx": 262144, "desc": "Tier 6: Full Monorepo (256k)"},
+        {"prompt": "override", "intent": "code", "files": 1, "override": "64k", "expected_ctx": 64000, "desc": "Manual Override (64k)"}
+    ]
+
+    all_passed = True
+    results = []
+    for c in cases:
+        override = c.get("override", "auto")
+        plan = client.context_policy.resolve(
+            mode=override,
+            prompt=c["prompt"],
+            task_intent=c["intent"],
+            file_count=c["files"]
+        )
+        passed = (plan["ctx_size"] == c["expected_ctx"])
+        if not passed:
+            all_passed = False
+        print(f" -> [{ 'PASS' if passed else 'FAIL' }] {c['desc']:<38} | Resolved: {plan['ctx_size']} tok ({plan['tier']})")
+        results.append({
+            "test_case": c["desc"],
+            "resolved_ctx": plan["ctx_size"],
+            "expected_ctx": c["expected_ctx"],
+            "tier": plan["tier"],
+            "passed": passed
+        })
+
+    return {
+        "suite": "Suite A2: Auto-Context Policy",
         "passed": all_passed,
         "total_tests": len(cases),
         "passed_tests": sum(1 for r in results if r["passed"]),
@@ -181,8 +226,11 @@ def run_full_battery():
 
     t_global_start = time.time()
 
-    # Run Suite A
-    suite_a = run_suite_a_policy_verification(client)
+    # Run Suite A1
+    suite_a1 = run_suite_a_policy_verification(client)
+
+    # Run Suite A2
+    suite_a2 = run_suite_a2_context_verification(client)
 
     # Run Suite B
     suite_b = run_suite_b_production_repo(runner)
@@ -198,12 +246,13 @@ def run_full_battery():
     print("=" * 80)
     print(f"{'Battery Suite':<40} | {'Status':<10} | {'Score':<10} | {'Time':<8}")
     print("-" * 76)
-    print(f"{suite_a['suite']:<40} | {'PASS' if suite_a['passed'] else 'FAIL':<10} | {suite_a['passed_tests']}/{suite_a['total_tests']:<8} | {'<0.1s':<8}")
+    print(f"{suite_a1['suite']:<40} | {'PASS' if suite_a1['passed'] else 'FAIL':<10} | {suite_a1['passed_tests']}/{suite_a1['total_tests']:<8} | {'<0.1s':<8}")
+    print(f"{suite_a2['suite']:<40} | {'PASS' if suite_a2['passed'] else 'FAIL':<10} | {suite_a2['passed_tests']}/{suite_a2['total_tests']:<8} | {'<0.1s':<8}")
     print(f"{suite_b['suite']:<40} | {'PASS' if suite_b['passed'] else 'FAIL':<10} | {suite_b['pass_count']}/{suite_b['total_tasks']:<8} | {str(suite_b['total_latency'])+'s':<8}")
     print(f"{suite_c['suite']:<40} | {'PASS' if suite_c['passed'] else 'FAIL':<10} | {suite_c['pass_count']}/{suite_c['total_tasks']:<8} | {str(suite_c['total_latency'])+'s':<8}")
     print("-" * 76)
-    total_passed = suite_a["passed_tests"] + suite_b["pass_count"] + suite_c["pass_count"]
-    total_count = suite_a["total_tests"] + suite_b["total_tasks"] + suite_c["total_tasks"]
+    total_passed = suite_a1["passed_tests"] + suite_a2["passed_tests"] + suite_b["pass_count"] + suite_c["pass_count"]
+    total_count = suite_a1["total_tests"] + suite_a2["total_tests"] + suite_b["total_tasks"] + suite_c["total_tasks"]
     overall_pct = (total_passed / total_count) * 100
     print(f"{'OVERALL BATTERY COMPOSITE':<40} | {'PASS' if overall_pct == 100 else 'PARTIAL':<10} | {total_passed}/{total_count} ({overall_pct:.1f}%) | {total_battery_time:.2f}s")
     print("=" * 80)
@@ -213,9 +262,11 @@ def run_full_battery():
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "backend": "llama.cpp (Metal)",
         "thinking_mode": "auto",
+        "context_mode": "auto",
         "total_time_sec": round(total_battery_time, 2),
         "overall_pass_rate_pct": round(overall_pct, 1),
-        "suite_a_policy": suite_a,
+        "suite_a1_thinking_policy": suite_a1,
+        "suite_a2_context_policy": suite_a2,
         "suite_b_requests_repo": suite_b,
         "suite_c_swe_bench_mini": suite_c
     }

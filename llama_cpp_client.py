@@ -42,7 +42,14 @@ class AutoThinkingPolicy:
         # "auto" resolution logic
         if has_schema:
             return False
-        if is_retry and ("assert" in prompt.lower() or "traceback" in prompt.lower()):
+        if is_retry and (
+            "assert" in prompt.lower()
+            or "traceback" in prompt.lower()
+            or "error[" in prompt.lower()
+            or "mismatched" in prompt.lower()
+            or "cannot borrow" in prompt.lower()
+            or "failed" in prompt.lower()
+        ):
             return True
         if task_intent in ("code", "synthesis", "micro_patch", "completion"):
             return False
@@ -50,19 +57,100 @@ class AutoThinkingPolicy:
             return True
         return False
 
+class AutoContextPolicy:
+    """
+    Intelligent Auto-Context Policy for LFM3 Swarm Agents & Pi Assistant.
+    Dynamically sizes context allocation and generation token headroom based on task complexity:
+    - Tier 1: Micro / Patch (single function, 2,048 tokens).
+    - Tier 2: Module / Intra-file context with tests (8,192 tokens).
+    - Tier 3: Multi-file / Call Graph & Architecture (32,768 tokens).
+    - Tier 4: Cross-crate / Monorepo Integration (65,536 - 131,072 tokens).
+    - Tier 5: Extreme / Full Repo Ingestion (up to 262,144 tokens max trained).
+    """
+    TIERS = [
+        (1500, 2048, 512, "Tier 1: Micro Patch (2k)"),
+        (6000, 8192, 1024, "Tier 2: Module Context (8k)"),
+        (24000, 32768, 2048, "Tier 3: Call Graph / Multi-File (32k)"),
+        (50000, 65536, 4096, "Tier 4: Subsystem / Integration (64k)"),
+        (100000, 131072, 8192, "Tier 5: Deep Codebase (128k)"),
+        (250000, 262144, 8192, "Tier 6: Maximum Monorepo (256k)")
+    ]
+
+    @classmethod
+    def resolve(
+        cls,
+        mode: Union[str, int] = "auto",
+        prompt: str = "",
+        task_intent: str = "code",
+        file_count: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Resolves context size and recommended n_predict token budget.
+        Returns: { 'ctx_size': int, 'n_predict': int, 'tier': str, 'mode': str }
+        """
+        # Explicit override
+        if mode not in ("auto", "Auto", None):
+            if isinstance(mode, int):
+                ctx = mode
+            else:
+                m = str(mode).lower().replace("k", "000")
+                try:
+                    ctx = int(m)
+                except ValueError:
+                    ctx = 32768
+            return {
+                "ctx_size": min(ctx, 262144),
+                "n_predict": min(max(512, ctx // 4), 4096),
+                "tier": f"Manual Override ({ctx} tokens)",
+                "mode": "override"
+            }
+
+        # Auto resolution
+        est_tokens = len(prompt) // 4  # ~4 chars per token approximation
+
+        # Boost tier based on task complexity
+        if task_intent in ("repo_wide", "audit", "trace_analysis"):
+            est_tokens = max(est_tokens, 50000)
+        elif task_intent in ("subsystem", "architecture"):
+            est_tokens = max(est_tokens, 25000)
+        elif task_intent in ("call_graph", "multi_file") or file_count > 3:
+            est_tokens = max(est_tokens, 10000)
+        elif task_intent in ("diagnosis", "planning"):
+            est_tokens = max(est_tokens, 3000)
+
+        for token_threshold, target_ctx, n_pred, label in cls.TIERS:
+            if est_tokens <= token_threshold:
+                return {
+                    "ctx_size": target_ctx,
+                    "n_predict": n_pred,
+                    "tier": label,
+                    "mode": "auto"
+                }
+
+        # Default fallback to max
+        return {
+            "ctx_size": 262144,
+            "n_predict": 8192,
+            "tier": "Tier 6: Maximum Monorepo (256k)",
+            "mode": "auto"
+        }
+
 class LlamaCppClient:
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8080",
         model: str = "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
         timeout: float = 35.0,
-        thinking_mode: Union[str, bool] = "auto"
+        thinking_mode: Union[str, bool] = "auto",
+        context_mode: Union[str, int] = "auto"
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.thinking_mode = thinking_mode
+        self.context_mode = context_mode
         self.policy = AutoThinkingPolicy()
+        self.context_policy = AutoContextPolicy()
 
     def check_health(self) -> bool:
         try:

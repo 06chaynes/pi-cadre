@@ -1,11 +1,12 @@
 {
-  "timestamp": "2026-10-29 14:25:23",
+  "timestamp": "2026-10-29 16:31:45",
   "backend": "llama.cpp (Metal)",
   "thinking_mode": "auto",
-  "total_time_sec": 28.39,
+  "context_mode": "auto",
+  "total_time_sec": 28.14,
   "overall_pass_rate_pct": 100.0,
-  "suite_a_policy": {
-    "suite": "Suite A: Auto-Thinking Policy",
+  "suite_a1_thinking_policy": {
+    "suite": "Suite A1: Auto-Thinking Policy",
     "passed": true,
     "total_tests": 6,
     "passed_tests": 6,
@@ -48,18 +49,75 @@
       }
     ]
   },
+  "suite_a2_context_policy": {
+    "suite": "Suite A2: Auto-Context Policy",
+    "passed": true,
+    "total_tests": 7,
+    "passed_tests": 7,
+    "details": [
+      {
+        "test_case": "Tier 1: Micro Patch (<1.5k tok)",
+        "resolved_ctx": 2048,
+        "expected_ctx": 2048,
+        "tier": "Tier 1: Micro Patch (2k)",
+        "passed": true
+      },
+      {
+        "test_case": "Tier 2: Module Context (1.5k-6k tok)",
+        "resolved_ctx": 8192,
+        "expected_ctx": 8192,
+        "tier": "Tier 2: Module Context (8k)",
+        "passed": true
+      },
+      {
+        "test_case": "Tier 3: Multi-File Call Graph",
+        "resolved_ctx": 32768,
+        "expected_ctx": 32768,
+        "tier": "Tier 3: Call Graph / Multi-File (32k)",
+        "passed": true
+      },
+      {
+        "test_case": "Tier 4: Subsystem Integration",
+        "resolved_ctx": 65536,
+        "expected_ctx": 65536,
+        "tier": "Tier 4: Subsystem / Integration (64k)",
+        "passed": true
+      },
+      {
+        "test_case": "Tier 5: Deep Codebase",
+        "resolved_ctx": 131072,
+        "expected_ctx": 131072,
+        "tier": "Tier 5: Deep Codebase (128k)",
+        "passed": true
+      },
+      {
+        "test_case": "Tier 6: Full Monorepo (256k)",
+        "resolved_ctx": 262144,
+        "expected_ctx": 262144,
+        "tier": "Tier 6: Maximum Monorepo (256k)",
+        "passed": true
+      },
+      {
+        "test_case": "Manual Override (64k)",
+        "resolved_ctx": 64000,
+        "expected_ctx": 64000,
+        "tier": "Manual Override (64000 tokens)",
+        "passed": true
+      }
+    ]
+  },
   "suite_b_requests_repo": {
     "suite": "Suite B: psf/requests (15k LOC)",
     "passed": true,
     "pass_count": 4,
     "total_tasks": 4,
-    "total_latency": 24.38,
+    "total_latency": 24.26,
     "results": [
       {
         "task_id": "TASK-1",
         "title": "Proxy URL Auth Preservation",
         "passed": true,
-        "latency": 5.43,
+        "latency": 5.58,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       },
@@ -67,7 +125,7 @@
         "task_id": "TASK-2",
         "title": "CA Bundle Environment Fallback",
         "passed": true,
-        "latency": 6.75,
+        "latency": 6.6,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       },
@@ -75,7 +133,7 @@
         "task_id": "TASK-3",
         "title": "URL Credential Unquoting",
         "passed": true,
-        "latency": 4.15,
+        "latency": 4.1,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       },
@@ -83,7 +141,7 @@
         "task_id": "TASK-4",
         "title": "Multi-Hop Redirect State Drift",
         "passed": true,
-        "latency": 7.87,
+        "latency": 7.79,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       }
@@ -94,7 +152,7 @@
     "passed": true,
     "pass_count": 5,
     "total_tasks": 5,
-    "total_latency": 4.01,
+    "total_latency": 3.88,
     "results": [
       {
         "instance_id": "django__django-10914",
@@ -104,7 +162,7 @@
         "ast_valid": true,
         "latency": 0.8,
         "tokens": 51,
-        "tokens_per_sec": 63.98
+        "tokens_per_sec": 63.5
       },
       {
         "instance_id": "pytest-dev__pytest-11143",
@@ -112,9 +170,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.77,
+        "latency": 0.76,
         "tokens": 54,
-        "tokens_per_sec": 70.35
+        "tokens_per_sec": 71.12
       },
       {
         "instance_id": "psf__requests-1963",
@@ -122,9 +180,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.44,
+        "latency": 0.43,
         "tokens": 23,
-        "tokens_per_sec": 52.77
+        "tokens_per_sec": 53.91
       },
       {
         "instance_id": "astropy__astropy-12907",
@@ -132,9 +190,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 1.12,
+        "latency": 1.02,
         "tokens": 74,
-        "tokens_per_sec": 65.79
+        "tokens_per_sec": 72.31
       },
       {
         "instance_id": "astropy__astropy-14995",
@@ -142,9 +200,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.88,
+        "latency": 0.86,
         "tokens": 59,
-        "tokens_per_sec": 66.96
+        "tokens_per_sec": 68.42
       }
     ]
   }
