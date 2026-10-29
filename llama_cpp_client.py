@@ -19,7 +19,7 @@ socket.setdefaulttimeout(40.0)
 
 class AutoThinkingPolicy:
     """
-    Intelligent Auto-Thinking Policy for LFM3 Swarm Agents.
+    Intelligent Auto-Thinking Policy for Multi-Model Swarm Agents (LFM3 & Spark-X2.6).
     Decides when thinking (<think>...</think>) should be enabled vs disabled:
     - Code Synthesis & Micro-Editing: OFF (steered via prefix pre-fill to avoid token budget exhaustion).
     - Structured Schemas (JSON/GBNF): OFF (guarantees valid first-token JSON compliance).
@@ -56,6 +56,70 @@ class AutoThinkingPolicy:
         if task_intent in ("diagnosis", "reasoning", "trace_analysis", "planning"):
             return True
         return False
+
+class AutoModelPolicy:
+    """
+    Intelligent Model Selection Policy for Multi-Model Swarms.
+    Selects between:
+      1. Spark-X2.6-4B (port 8080): 4.0B params, 1M context, deep multi-step reasoning, tool use.
+      2. LFM3-1.7B (port 8081): 1.7B params, 256k context, ultra-fast linear SSM micro-patching (0.4s).
+    Supports:
+      - Global override: mode="spark" or mode="lfm3"
+      - Auto mode: mode="auto" (dynamically selects the optimal model based on latency vs reasoning depth)
+    """
+    SPARK_CONFIG = {
+        "id": "spark",
+        "name": "Spark-X2.6-4B",
+        "port": 8080,
+        "base_url": "http://127.0.0.1:8080",
+        "max_context": 1048576,
+        "default_slots": 8
+    }
+    LFM3_CONFIG = {
+        "id": "lfm3",
+        "name": "LFM3-1.7B",
+        "port": 8081,
+        "base_url": "http://127.0.0.1:8081",
+        "max_context": 262144,
+        "default_slots": 16
+    }
+
+    @classmethod
+    def resolve(
+        cls,
+        mode: str = "auto",
+        task_intent: str = "code",
+        context_needed: int = 2048,
+        is_micro_patch: bool = False,
+        requires_deep_reasoning: bool = False,
+        prompt: str = ""
+    ) -> Dict[str, Any]:
+        # Global override
+        m = str(mode or "auto").lower().strip()
+        if m in ("spark", "spark-4b", "spark2.6", "spark2_6"):
+            return {**cls.SPARK_CONFIG, "selection_reason": "Global Override (Spark-X2.6-4B)", "mode": "override"}
+        if m in ("lfm3", "lfm", "lfm3-1.7b"):
+            return {**cls.LFM3_CONFIG, "selection_reason": "Global Override (LFM3-1.7B)", "mode": "override"}
+
+        # Auto resolution
+        # 1. Massive context requirements (>131k tokens up to 1M) -> Spark-X2.6-4B
+        if context_needed > 131072:
+            return {**cls.SPARK_CONFIG, "selection_reason": f"High Context Requirement ({context_needed} tokens > 131k)", "mode": "auto"}
+
+        # 2. Ultra-low latency micro-patching (<2k tokens, prefix prefill, fencepost bug fixes) -> LFM3-1.7B
+        if is_micro_patch or task_intent in ("micro_patch", "completion", "fencepost"):
+            return {**cls.LFM3_CONFIG, "selection_reason": "Ultra-Low Latency Micro-Patching (SSM Linear Attention)", "mode": "auto"}
+
+        # 3. High-level architecture, diagnostic self-healing, multi-step planning -> Spark-X2.6-4B
+        if requires_deep_reasoning or task_intent in ("architecture", "diagnosis", "planning", "root_cause", "trace_analysis"):
+            return {**cls.SPARK_CONFIG, "selection_reason": "Deep Multi-Step Reasoning & Root-Cause Diagnosis", "mode": "auto"}
+
+        # 4. High-throughput swarm routines (AST symbol scanning, structured schema decoding) -> LFM3-1.7B
+        if task_intent in ("scout", "schema", "swarm_worker"):
+            return {**cls.LFM3_CONFIG, "selection_reason": "High-Throughput Swarm Scout & Schema Decoding (16 parallel slots)", "mode": "auto"}
+
+        # Default: Spark-X2.6-4B for general software engineering and multi-file synthesis
+        return {**cls.SPARK_CONFIG, "selection_reason": "Balanced General Coding & Agent Synthesis", "mode": "auto"}
 
 class AutoContextPolicy:
     """
@@ -165,6 +229,7 @@ class LlamaCppClient:
         timeout: float = 45.0,
         thinking_mode: Union[str, bool] = "auto",
         context_mode: Union[str, int] = "auto",
+        model_mode: str = "auto",
         model_family: Optional[str] = None
     ):
         self.base_url = base_url.rstrip("/")
@@ -172,8 +237,15 @@ class LlamaCppClient:
         self.timeout = timeout
         self.thinking_mode = thinking_mode
         self.context_mode = context_mode
+        self.model_mode = model_mode
         self.policy = AutoThinkingPolicy()
         self.context_policy = AutoContextPolicy()
+        self.model_policy = AutoModelPolicy()
+
+        self.endpoints = {
+            "spark": "http://127.0.0.1:8080",
+            "lfm3": "http://127.0.0.1:8081"
+        }
         
         # Detect model family and context ceiling
         if model_family:
@@ -185,14 +257,101 @@ class LlamaCppClient:
 
         self.max_model_ctx = 1048576 if self.model_family == "spark" else 262144
 
-    def check_health(self) -> bool:
+    def check_health(self, url: Optional[str] = None) -> bool:
+        target = (url or self.base_url).rstrip("/")
         try:
-            req = urllib.request.Request(f"{self.base_url}/health")
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
+            req = urllib.request.Request(f"{target}/health")
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
                 data = json.loads(resp.read().decode())
                 return data.get("status") == "ok"
         except Exception:
             return False
+
+    def ensure_servers(self, required_models: Optional[List[str]] = None) -> Dict[str, bool]:
+        """
+        Automatically verifies and boots required llama-server instances if offline.
+        Provides a single-click seamless execution experience.
+        """
+        import subprocess
+        needed = required_models or (["spark", "lfm3"] if self.model_mode == "auto" else [self.model_mode])
+        status = {}
+
+        for m in needed:
+            m_key = "spark" if "spark" in m.lower() else "lfm3"
+            url = self.endpoints.get(m_key, self.base_url)
+            if self.check_health(url):
+                status[m_key] = True
+                continue
+
+            # Boot the missing server
+            if m_key == "spark":
+                cmd = [
+                    "llama-server",
+                    "-m", "models/Spark-X2.6-4B-Q4_K_M.gguf",
+                    "--port", "8080",
+                    "--ctx-size", "65536",
+                    "--parallel", "8",
+                    "-ngl", "99"
+                ]
+            else:
+                cmd = [
+                    "llama-server",
+                    "-hf", "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
+                    "--port", "8081",
+                    "--ctx-size", "32768",
+                    "--parallel", "16",
+                    "-ngl", "99"
+                ]
+
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+                # Wait for health
+                for _ in range(12):
+                    time.sleep(0.5)
+                    if self.check_health(url):
+                        status[m_key] = True
+                        break
+                else:
+                    status[m_key] = False
+            except Exception:
+                status[m_key] = False
+
+        return status
+
+    def get_active_url(
+        self,
+        target_model: Optional[str] = None,
+        task_intent: str = "code",
+        context_needed: int = 2048,
+        is_micro_patch: bool = False,
+        prompt: str = ""
+    ) -> Tuple[str, str]:
+        """
+        Resolves active server URL and model ID based on AutoModelPolicy.
+        Returns: (base_url, model_id)
+        """
+        if target_model:
+            m_key = "spark" if "spark" in target_model.lower() else "lfm3"
+            return self.endpoints.get(m_key, self.base_url), m_key
+
+        plan = self.model_policy.resolve(
+            mode=self.model_mode,
+            task_intent=task_intent,
+            context_needed=context_needed,
+            is_micro_patch=is_micro_patch,
+            prompt=prompt
+        )
+        url = self.endpoints.get(plan["id"], self.base_url)
+        # If resolved endpoint is down but base_url is alive, fallback gracefully
+        if not self.check_health(url) and self.check_health(self.base_url):
+            return self.base_url, self.model_family
+
+        return url, plan["id"]
 
     def chat(
         self,
@@ -203,14 +362,15 @@ class LlamaCppClient:
         grammar: Optional[str] = None,
         task_intent: str = "code",
         is_retry: bool = False,
-        enable_thinking: Optional[bool] = None
+        enable_thinking: Optional[bool] = None,
+        target_model: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Sends chat completion request to llama-server.
+        Sends chat completion request to the auto-selected or specified model server.
         Supports native thinking resolution and chat_template_kwargs toggling.
         """
+        last_prompt = messages[-1].get("content", "") if messages else ""
         if enable_thinking is None:
-            last_prompt = messages[-1].get("content", "") if messages else ""
             enable_thinking = self.policy.resolve(
                 mode=self.thinking_mode,
                 task_intent=task_intent,
@@ -218,6 +378,13 @@ class LlamaCppClient:
                 is_retry=is_retry,
                 prompt=last_prompt
             )
+
+        active_url, resolved_model = self.get_active_url(
+            target_model=target_model,
+            task_intent=task_intent,
+            context_needed=max_tokens * 2,
+            prompt=last_prompt
+        )
 
         payload: Dict[str, Any] = {
             "model": self.model,
@@ -234,7 +401,7 @@ class LlamaCppClient:
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            f"{self.base_url}/v1/chat/completions",
+            f"{active_url}/v1/chat/completions",
             data=data,
             headers={"Content-Type": "application/json"}
         )
@@ -259,6 +426,8 @@ class LlamaCppClient:
                     "success": True,
                     "content": content,
                     "reasoning": reasoning,
+                    "model_used": resolved_model,
+                    "active_url": active_url,
                     "elapsed_sec": round(elapsed, 3),
                     "tokens": completion_tokens,
                     "tokens_per_sec": round(tok_per_sec, 2),
@@ -270,6 +439,8 @@ class LlamaCppClient:
                 "success": False,
                 "content": "",
                 "reasoning": "",
+                "model_used": resolved_model,
+                "active_url": active_url,
                 "elapsed_sec": round(elapsed, 3),
                 "tokens": 0,
                 "tokens_per_sec": 0.0,
@@ -281,12 +452,23 @@ class LlamaCppClient:
         prompt: str,
         n_predict: int = 500,
         temperature: float = 0.0,
-        stop: Optional[List[str]] = None
+        stop: Optional[List[str]] = None,
+        task_intent: str = "code",
+        target_model: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Direct native completion endpoint with prefix pre-filling support.
-        Bypasses thinking token latency and conversational preambles.
+        Automatically routes micro-patching to LFM3 (sub-second) and complex reasoning to Spark.
         """
+        is_micro = (n_predict <= 300 and ("assert" not in prompt.lower()))
+        active_url, resolved_model = self.get_active_url(
+            target_model=target_model,
+            task_intent=task_intent,
+            context_needed=n_predict * 2,
+            is_micro_patch=is_micro,
+            prompt=prompt
+        )
+
         payload: Dict[str, Any] = {
             "prompt": prompt,
             "n_predict": n_predict,
@@ -300,7 +482,7 @@ class LlamaCppClient:
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            f"{self.base_url}/completion",
+            f"{active_url}/completion",
             data=data,
             headers={"Content-Type": "application/json"}
         )
@@ -316,6 +498,8 @@ class LlamaCppClient:
                 return {
                     "success": True,
                     "content": content,
+                    "model_used": resolved_model,
+                    "active_url": active_url,
                     "tokens": tokens,
                     "elapsed_sec": round(elapsed, 3),
                     "tokens_per_sec": round(tok_per_sec, 2),
@@ -326,6 +510,8 @@ class LlamaCppClient:
             return {
                 "success": False,
                 "content": "",
+                "model_used": resolved_model,
+                "active_url": active_url,
                 "tokens": 0,
                 "elapsed_sec": round(elapsed, 3),
                 "tokens_per_sec": 0.0,
@@ -363,6 +549,20 @@ class LlamaCppClient:
 
         try:
             parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                import re
+                clean_parsed = {}
+                for k, v in parsed.items():
+                    if isinstance(v, str):
+                        # Strip trailing markdown codeblock delimiter or extra JSON characters if accidentally emitted
+                        if "'" in v or "`" in v or "\n" in v:
+                            v_clean = re.split(r"['\"`\s\(\)\{\}]", v)[0].strip()
+                            clean_parsed[k] = v_clean if v_clean else v.strip()
+                        else:
+                            clean_parsed[k] = v.strip()
+                    else:
+                        clean_parsed[k] = v
+                parsed = clean_parsed
             return {"success": True, "valid_json": True, "parsed": parsed, "raw": content, "elapsed_sec": res["elapsed_sec"]}
         except Exception as e:
             return {"success": False, "valid_json": False, "parsed": None, "raw": content, "error": str(e), "elapsed_sec": res["elapsed_sec"]}

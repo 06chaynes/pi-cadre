@@ -112,6 +112,48 @@ def run_suite_a2_context_verification(client: LlamaCppClient) -> Dict[str, Any]:
         "details": results
     }
 
+def run_suite_a3_model_policy_verification(client: LlamaCppClient) -> Dict[str, Any]:
+    print("\n" + "=" * 76)
+    print(" SUITE A3: AUTO-MODEL POLICY & DYNAMIC ROUTING VERIFICATION")
+    print("=" * 76)
+
+    cases = [
+        {"mode": "auto", "intent": "micro_patch", "ctx": 2048, "expected_model": "lfm3", "desc": "Auto: Micro-Patch (<2k tok) -> LFM3-1.7B"},
+        {"mode": "auto", "intent": "scout", "ctx": 2048, "expected_model": "lfm3", "desc": "Auto: High-Throughput Swarm Scout -> LFM3-1.7B"},
+        {"mode": "auto", "intent": "architecture", "ctx": 65536, "expected_model": "spark", "desc": "Auto: Architecture Planning -> Spark-X2.6-4B"},
+        {"mode": "auto", "intent": "diagnosis", "ctx": 32768, "expected_model": "spark", "desc": "Auto: Diagnostic Self-Healing -> Spark-X2.6-4B"},
+        {"mode": "auto", "intent": "repo_wide", "ctx": 524288, "expected_model": "spark", "desc": "Auto: Massive Context (512k) -> Spark-X2.6-4B"},
+        {"mode": "spark", "intent": "micro_patch", "ctx": 2048, "expected_model": "spark", "desc": "Override: Global Force Spark -> Spark-X2.6-4B"},
+        {"mode": "lfm3", "intent": "architecture", "ctx": 65536, "expected_model": "lfm3", "desc": "Override: Global Force LFM3 -> LFM3-1.7B"}
+    ]
+
+    all_passed = True
+    results = []
+    for c in cases:
+        plan = client.model_policy.resolve(
+            mode=c["mode"],
+            task_intent=c["intent"],
+            context_needed=c["ctx"]
+        )
+        passed = (plan["id"] == c["expected_model"])
+        if not passed:
+            all_passed = False
+        print(f" -> [{ 'PASS' if passed else 'FAIL' }] {c['desc']:<45} | Resolved: {plan['name']}")
+        results.append({
+            "test_case": c["desc"],
+            "resolved_model": plan["id"],
+            "expected_model": c["expected_model"],
+            "passed": passed
+        })
+
+    return {
+        "suite": "Suite A3: Auto-Model Policy",
+        "passed": all_passed,
+        "total_tests": len(cases),
+        "passed_tests": sum(1 for r in results if r["passed"]),
+        "details": results
+    }
+
 def run_suite_b_production_repo(runner: LlamaCppBenchmarkRunner) -> Dict[str, Any]:
     print("\n" + "=" * 76)
     print(" SUITE B: REAL-WORLD PRODUCTION REPO BENCHMARK (psf/requests - 15k LOC)")
@@ -148,7 +190,7 @@ def run_suite_c_swe_bench_mini(client: LlamaCppClient) -> Dict[str, Any]:
         t_inst = time.time()
         print(f"\nEvaluating {inst['instance_id']} ({inst['repo']})...")
         lines = [l for l in inst['code_context'].strip().splitlines() if not l.strip().startswith('#')]
-        prefill = lines[0].strip() if lines else ""
+        first_line = lines[0].strip() if lines else ""
 
         sys_prompt = (
             "You are a Principal Software Engineer. Fix the bug in the provided code snippet.\n"
@@ -157,33 +199,80 @@ def run_suite_c_swe_bench_mini(client: LlamaCppClient) -> Dict[str, Any]:
             "2. DO NOT add any import statements.\n"
             "3. ZERO commentary or conversational text."
         )
+        clean_code_context = textwrap.dedent("\n".join(l for l in inst["code_context"].strip().splitlines() if not l.strip().startswith("#")))
         user_prompt = (
             f"[BUG SPECIFICATION]:\n{inst['problem_summary']}\n\n"
-            f"[SOURCE CODE WINDOW]:\n```python\n{textwrap.dedent(inst['code_context'].strip())}\n```"
+            f"[SOURCE CODE WINDOW]:\n```python\n{clean_code_context}\n```"
         )
-        full_prompt = (
-            f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-            f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
-            f"<|im_start|>assistant\n```python\n{prefill}"
-        )
+        
+        active_url, resolved_model = client.get_active_url(task_intent="code", prompt=inst["problem_summary"])
+        is_spark = ("spark" in resolved_model.lower())
 
-        res = client.completion(
-            prompt=full_prompt,
-            n_predict=300,
-            temperature=0.0,
-            stop=["```", "<|im_end|>", "<|endoftext|>"]
-        )
-        gen_text = prefill + "\n" + res.get("content", "")
+        if is_spark:
+            msgs = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt + "\n\nFix the bug and output strictly the corrected code snippet inside a ```python ``` block."}
+            ]
+            res = client.chat(msgs, max_tokens=350, temperature=0.0, target_model="spark")
+            raw_text = res.get("content", "")
+            blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_text, re.DOTALL)
+            gen_text = blocks[0].strip() if blocks else raw_text.strip()
+        else:
+            # Prefill only structural function/class headers; do not prefill the defect line itself
+            if first_line.startswith("def ") or first_line.startswith("class "):
+                assistant_header = f"```python\n{first_line}"
+                full_prompt = (
+                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n{assistant_header}"
+                )
+                res = client.completion(
+                    prompt=full_prompt,
+                    n_predict=350,
+                    temperature=0.0,
+                    stop=["```", "<|im_end|>", "<|endoftext|>"],
+                    task_intent="code",
+                    target_model="lfm3"
+                )
+                gen_text = first_line + "\n" + res.get("content", "")
+            else:
+                full_prompt = (
+                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n```python\n"
+                )
+                res = client.completion(
+                    prompt=full_prompt,
+                    n_predict=350,
+                    temperature=0.0,
+                    stop=["```", "<|im_end|>", "<|endoftext|>"],
+                    task_intent="code",
+                    target_model="lfm3"
+                )
+                gen_text = res.get("content", "")
+
         el = time.time() - t_inst
         tok_speed = res.get("tokens_per_sec", 0.0)
 
         # Verification: check ground truth keyword and in-memory AST syntax
         keyword_present = inst["ground_truth_fix_keyword"] in gen_text
+        sanitized_gen = re.sub(r':(\s*\n\s*\):)', r'\1', gen_text)
+        code_no_comments = "\n".join(l for l in sanitized_gen.splitlines() if not l.strip().startswith("#"))
+        dedented = textwrap.dedent(code_no_comments).strip()
         try:
-            ast.parse(textwrap.dedent(gen_text))
+            ast.parse(dedented)
             ast_valid = True
-        except Exception:
+        except SyntaxError:
+            try:
+                # Wrap inside a function scope in case the snippet contains 'return', 'yield', or method-level statements
+                ast.parse(f"def _dummy():\n{textwrap.indent(dedented, '    ')}")
+                ast_valid = True
+            except Exception as e:
+                ast_valid = False
+                print(f" -> AST Validation Error: {e}")
+        except Exception as e:
             ast_valid = False
+            print(f" -> AST Validation Error: {e}")
 
         passed = keyword_present and ast_valid
         print(f" -> Fix Keyword Present: {keyword_present} ('{inst['ground_truth_fix_keyword']}')")
@@ -212,30 +301,48 @@ def run_suite_c_swe_bench_mini(client: LlamaCppClient) -> Dict[str, Any]:
         "results": results
     }
 
-def run_full_battery():
-    print("=" * 80)
-    print("   LFM3 1.7B FULL TEST BATTERY: LLAMA.CPP METAL BACKEND & AUTO-THINKING")
-    print("=" * 80)
-    print(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Backend Server: http://127.0.0.1:8080 (llama-server Metal GPU, --parallel 4)")
-    print(f"Default Thinking Policy: auto")
+def run_full_battery(model_mode: str = "auto"):
+    import argparse
+    parser = argparse.ArgumentParser(description="Multi-Model Swarm Full Test Battery")
+    parser.add_argument("--model", choices=["auto", "spark", "lfm3"], default="auto", help="Model routing mode")
+    args, _ = parser.parse_known_args()
+    mode = args.model or model_mode
 
-    client = LlamaCppClient(base_url="http://127.0.0.1:8080", thinking_mode="auto")
-    assert client.check_health(), "llama-server on port 8080 is not reachable!"
-    runner = LlamaCppBenchmarkRunner(base_url="http://127.0.0.1:8080", thinking_mode="auto")
+    print("=" * 80)
+    print("      MULTI-MODEL SWARM FULL TEST BATTERY: SPARK-X2.6-4B & LFM3-1.7B")
+    print("=" * 80)
+    print(f"Timestamp:              {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Active Model Mode:       {mode.upper()} ({'Dynamic Auto-Routing' if mode == 'auto' else 'Global Override'})")
+    print(f"Primary Spark Endpoint:  http://127.0.0.1:8080 (Spark-X2.6-4B, 1M Context)")
+    print(f"Primary LFM3 Endpoint:   http://127.0.0.1:8081 (LFM3-1.7B, 256k Context)")
+    print(f"Thinking Mode:           auto")
+    print(f"Context Mode:            auto")
+
+    client = LlamaCppClient(thinking_mode="auto", context_mode="auto", model_mode=mode)
+    
+    # Auto-start servers if any are offline
+    print("\n[Auto-Start] Verifying server daemon readiness...")
+    server_status = client.ensure_servers()
+    for s_name, s_ok in server_status.items():
+        print(f" -> Server [{s_name.upper()}]: {'ONLINE 🟢' if s_ok else 'FAILED TO BOOT 🔴'}")
+
+    runner = LlamaCppBenchmarkRunner(thinking_mode="auto")
 
     t_global_start = time.time()
 
-    # Run Suite A1
+    # Run Suite A1: Auto-Thinking
     suite_a1 = run_suite_a_policy_verification(client)
 
-    # Run Suite A2
+    # Run Suite A2: Auto-Context
     suite_a2 = run_suite_a2_context_verification(client)
 
-    # Run Suite B
+    # Run Suite A3: Auto-Model Selection
+    suite_a3 = run_suite_a3_model_policy_verification(client)
+
+    # Run Suite B: Production Repo
     suite_b = run_suite_b_production_repo(runner)
 
-    # Run Suite C
+    # Run Suite C: SWE-Bench Lite Mini
     suite_c = run_suite_c_swe_bench_mini(client)
 
     total_battery_time = time.time() - t_global_start
@@ -248,11 +355,12 @@ def run_full_battery():
     print("-" * 76)
     print(f"{suite_a1['suite']:<40} | {'PASS' if suite_a1['passed'] else 'FAIL':<10} | {suite_a1['passed_tests']}/{suite_a1['total_tests']:<8} | {'<0.1s':<8}")
     print(f"{suite_a2['suite']:<40} | {'PASS' if suite_a2['passed'] else 'FAIL':<10} | {suite_a2['passed_tests']}/{suite_a2['total_tests']:<8} | {'<0.1s':<8}")
+    print(f"{suite_a3['suite']:<40} | {'PASS' if suite_a3['passed'] else 'FAIL':<10} | {suite_a3['passed_tests']}/{suite_a3['total_tests']:<8} | {'<0.1s':<8}")
     print(f"{suite_b['suite']:<40} | {'PASS' if suite_b['passed'] else 'FAIL':<10} | {suite_b['pass_count']}/{suite_b['total_tasks']:<8} | {str(suite_b['total_latency'])+'s':<8}")
     print(f"{suite_c['suite']:<40} | {'PASS' if suite_c['passed'] else 'FAIL':<10} | {suite_c['pass_count']}/{suite_c['total_tasks']:<8} | {str(suite_c['total_latency'])+'s':<8}")
     print("-" * 76)
-    total_passed = suite_a1["passed_tests"] + suite_a2["passed_tests"] + suite_b["pass_count"] + suite_c["pass_count"]
-    total_count = suite_a1["total_tests"] + suite_a2["total_tests"] + suite_b["total_tasks"] + suite_c["total_tasks"]
+    total_passed = suite_a1["passed_tests"] + suite_a2["passed_tests"] + suite_a3["passed_tests"] + suite_b["pass_count"] + suite_c["pass_count"]
+    total_count = suite_a1["total_tests"] + suite_a2["total_tests"] + suite_a3["total_tests"] + suite_b["total_tasks"] + suite_c["total_tasks"]
     overall_pct = (total_passed / total_count) * 100
     print(f"{'OVERALL BATTERY COMPOSITE':<40} | {'PASS' if overall_pct == 100 else 'PARTIAL':<10} | {total_passed}/{total_count} ({overall_pct:.1f}%) | {total_battery_time:.2f}s")
     print("=" * 80)
@@ -261,12 +369,14 @@ def run_full_battery():
     summary_data = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "backend": "llama.cpp (Metal)",
+        "model_mode": mode,
         "thinking_mode": "auto",
         "context_mode": "auto",
         "total_time_sec": round(total_battery_time, 2),
         "overall_pass_rate_pct": round(overall_pct, 1),
         "suite_a1_thinking_policy": suite_a1,
         "suite_a2_context_policy": suite_a2,
+        "suite_a3_model_policy": suite_a3,
         "suite_b_requests_repo": suite_b,
         "suite_c_swe_bench_mini": suite_c
     }

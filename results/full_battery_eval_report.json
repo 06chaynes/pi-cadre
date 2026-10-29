@@ -1,9 +1,10 @@
 {
-  "timestamp": "2026-10-29 16:31:45",
+  "timestamp": "2026-10-29 18:10:20",
   "backend": "llama.cpp (Metal)",
+  "model_mode": "auto",
   "thinking_mode": "auto",
   "context_mode": "auto",
-  "total_time_sec": 28.14,
+  "total_time_sec": 64.75,
   "overall_pass_rate_pct": 100.0,
   "suite_a1_thinking_policy": {
     "suite": "Suite A1: Auto-Thinking Policy",
@@ -94,7 +95,7 @@
         "test_case": "Tier 6: Full Monorepo (256k)",
         "resolved_ctx": 262144,
         "expected_ctx": 262144,
-        "tier": "Tier 6: Maximum Monorepo (256k)",
+        "tier": "Tier 6: Full Monorepo (256k)",
         "passed": true
       },
       {
@@ -106,18 +107,68 @@
       }
     ]
   },
+  "suite_a3_model_policy": {
+    "suite": "Suite A3: Auto-Model Policy",
+    "passed": true,
+    "total_tests": 7,
+    "passed_tests": 7,
+    "details": [
+      {
+        "test_case": "Auto: Micro-Patch (<2k tok) -> LFM3-1.7B",
+        "resolved_model": "lfm3",
+        "expected_model": "lfm3",
+        "passed": true
+      },
+      {
+        "test_case": "Auto: High-Throughput Swarm Scout -> LFM3-1.7B",
+        "resolved_model": "lfm3",
+        "expected_model": "lfm3",
+        "passed": true
+      },
+      {
+        "test_case": "Auto: Architecture Planning -> Spark-X2.6-4B",
+        "resolved_model": "spark",
+        "expected_model": "spark",
+        "passed": true
+      },
+      {
+        "test_case": "Auto: Diagnostic Self-Healing -> Spark-X2.6-4B",
+        "resolved_model": "spark",
+        "expected_model": "spark",
+        "passed": true
+      },
+      {
+        "test_case": "Auto: Massive Context (512k) -> Spark-X2.6-4B",
+        "resolved_model": "spark",
+        "expected_model": "spark",
+        "passed": true
+      },
+      {
+        "test_case": "Override: Global Force Spark -> Spark-X2.6-4B",
+        "resolved_model": "spark",
+        "expected_model": "spark",
+        "passed": true
+      },
+      {
+        "test_case": "Override: Global Force LFM3 -> LFM3-1.7B",
+        "resolved_model": "lfm3",
+        "expected_model": "lfm3",
+        "passed": true
+      }
+    ]
+  },
   "suite_b_requests_repo": {
     "suite": "Suite B: psf/requests (15k LOC)",
     "passed": true,
     "pass_count": 4,
     "total_tasks": 4,
-    "total_latency": 24.26,
+    "total_latency": 56.6,
     "results": [
       {
         "task_id": "TASK-1",
         "title": "Proxy URL Auth Preservation",
         "passed": true,
-        "latency": 5.58,
+        "latency": 9.25,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       },
@@ -125,7 +176,7 @@
         "task_id": "TASK-2",
         "title": "CA Bundle Environment Fallback",
         "passed": true,
-        "latency": 6.6,
+        "latency": 14.53,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       },
@@ -133,7 +184,7 @@
         "task_id": "TASK-3",
         "title": "URL Credential Unquoting",
         "passed": true,
-        "latency": 4.1,
+        "latency": 3.2,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       },
@@ -141,7 +192,7 @@
         "task_id": "TASK-4",
         "title": "Multi-Hop Redirect State Drift",
         "passed": true,
-        "latency": 7.79,
+        "latency": 29.44,
         "scout_match": true,
         "backend": "llama.cpp (Metal)"
       }
@@ -152,7 +203,7 @@
     "passed": true,
     "pass_count": 5,
     "total_tasks": 5,
-    "total_latency": 3.88,
+    "total_latency": 8.15,
     "results": [
       {
         "instance_id": "django__django-10914",
@@ -160,9 +211,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.8,
-        "tokens": 51,
-        "tokens_per_sec": 63.5
+        "latency": 0.93,
+        "tokens": 32,
+        "tokens_per_sec": 34.63
       },
       {
         "instance_id": "pytest-dev__pytest-11143",
@@ -170,9 +221,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.76,
-        "tokens": 54,
-        "tokens_per_sec": 71.12
+        "latency": 1.78,
+        "tokens": 68,
+        "tokens_per_sec": 38.26
       },
       {
         "instance_id": "psf__requests-1963",
@@ -180,9 +231,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.43,
-        "tokens": 23,
-        "tokens_per_sec": 53.91
+        "latency": 0.75,
+        "tokens": 27,
+        "tokens_per_sec": 36.27
       },
       {
         "instance_id": "astropy__astropy-12907",
@@ -190,9 +241,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 1.02,
-        "tokens": 74,
-        "tokens_per_sec": 72.31
+        "latency": 2.48,
+        "tokens": 94,
+        "tokens_per_sec": 37.86
       },
       {
         "instance_id": "astropy__astropy-14995",
@@ -200,9 +251,9 @@
         "passed": true,
         "keyword_match": true,
         "ast_valid": true,
-        "latency": 0.86,
-        "tokens": 59,
-        "tokens_per_sec": 68.42
+        "latency": 2.21,
+        "tokens": 83,
+        "tokens_per_sec": 37.59
       }
     ]
   }

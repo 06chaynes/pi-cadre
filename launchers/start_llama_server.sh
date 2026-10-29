@@ -28,8 +28,13 @@ CTX_SIZE=${CTX_SIZE:-65536}
 EXTRA_ARGS=()
 
 # Parse CLI flags
+DUAL_MODE=false
 while [[ $# -gt 0 ]]; do
   case $1 in
+    -d|--dual)
+      DUAL_MODE=true
+      shift 1
+      ;;
     -c|--ctx|--ctx-size)
       CTX_SIZE="$2"
       shift 2
@@ -44,6 +49,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     -m|--model)
       MODEL_ID="$2"
+      if [ "$MODEL_ID" = "dual" ] || [ "$MODEL_ID" = "auto" ] || [ "$MODEL_ID" = "both" ]; then
+        DUAL_MODE=true
+      fi
       shift 2
       ;;
     -ngl|--gpu-layers)
@@ -56,15 +64,16 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [options] [-- extra_llama_args]"
       echo ""
       echo "Options:"
-      echo "  -m,  --model <id/path>   Model alias ('spark' or 'lfm3'), HF repo ID, or local .gguf path"
+      echo "  -d,  --dual              Start both models simultaneously (Spark on 8080, LFM3 on 8081)"
+      echo "  -m,  --model <id/path>   Model alias ('auto', 'dual', 'spark', or 'lfm3'), HF repo ID, or .gguf path"
       echo "  -c,  --ctx-size <num>    Total context pool across slots (e.g. 32768, 65536, 131072, 262144, 1048576)"
-      echo "                           (Default: 65536; Spark max trained: 1,048,576; LFM3: 262,144)"
       echo "  -np, --parallel <num>    Number of concurrent slots (default: 8 for Spark, 16 for LFM3)"
       echo "  -p,  --port <num>        Server port (default: 8080)"
       echo "  -ngl <num>               GPU offload layers (default: 99 = full Metal/CUDA)"
       echo "  -h,  --help              Show this help message"
       echo ""
       echo "Examples:"
+      echo "  $0 --dual                          # Start both Spark-4B (8080) and LFM3-1.7B (8081)"
       echo "  $0 -m spark -c 65536 -np 8         # Spark-X2.6 with 8 slots @ 8k tokens each"
       echo "  $0 -m spark -c 1048576 -np 1       # Spark-X2.6 with full 1M maximum context"
       echo "  $0 -m lfm3 -c 32768 -np 16         # LFM3-1.7B with 16 slots @ 2k tokens each"
@@ -125,6 +134,40 @@ if ! command -v llama-server &> /dev/null; then
     echo "Install via Homebrew: brew install llama.cpp"
     echo "Or run: python3 setup_wizard.py"
     exit 1
+fi
+
+if [ "$DUAL_MODE" = true ]; then
+    echo "=========================================================="
+    echo " Starting Dual-Model Swarm Daemon on Apple Silicon Metal"
+    echo " Model 1: Spark-X2.6-4B (port 8080 | 8 slots @ 8k tok | 1M max)"
+    echo " Model 2: LFM3-1.7B     (port 8081 | 16 slots @ 2k tok | 256k max)"
+    echo "=========================================================="
+
+    # Check port 8080
+    if curl -s http://127.0.0.1:8080/health | grep -q "ok"; then
+        echo " -> Port 8080: Spark-X2.6-4B is already running 🟢"
+    else
+        SPARK_TARGET="models/Spark-X2.6-4B-Q4_K_M.gguf"
+        if [ -f "$PROJECT_DIR/$SPARK_TARGET" ]; then
+            SPARK_ARG=(-m "$PROJECT_DIR/$SPARK_TARGET")
+        else
+            SPARK_ARG=(-hf "XHToken/Spark-X2.6-4B-GGUF:Q4_K_M")
+        fi
+        echo " -> Launching Spark-X2.6-4B on port 8080..."
+        llama-server "${SPARK_ARG[@]}" --port 8080 --ctx-size 65536 --parallel 8 -ngl 99 >/dev/null 2>&1 &
+    fi
+
+    # Check port 8081
+    if curl -s http://127.0.0.1:8081/health | grep -q "ok"; then
+        echo " -> Port 8081: LFM3-1.7B is already running 🟢"
+    else
+        echo " -> Launching LFM3-1.7B on port 8081..."
+        llama-server -hf LiquidAI/LFM3-1.7B-GGUF:Q4_K_M --port 8081 --ctx-size 32768 --parallel 16 -ngl 99 >/dev/null 2>&1 &
+    fi
+
+    sleep 2
+    echo "Dual-Model Swarm is active and ready."
+    exit 0
 fi
 
 # Select -m for local file vs -hf for Hugging Face hub

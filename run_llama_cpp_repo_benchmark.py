@@ -74,6 +74,11 @@ class LlamaCppBenchmarkRunner:
             "target_function": task["function"],
             "confidence": "high"
         }
+        # Sanitize function and file names against any trailing delimiters
+        target_fn = re.split(r"['\"`\s\(\)\{\}]", str(scout_decision.get("target_function", "")))[0].strip()
+        target_file = re.split(r"['\"`\s\(\)\{\}]", str(scout_decision.get("target_file", "")))[0].strip()
+        scout_decision["target_function"] = target_fn
+        scout_decision["target_file"] = target_file
         scout_latency = time.time() - t_scout
         scout_match = (scout_decision.get("target_function") == task["function"])
         print(f" -> Scout: {scout_decision.get('target_file')}::{scout_decision.get('target_function')} (Match={scout_match}) in {scout_latency:.2f}s")
@@ -99,7 +104,7 @@ class LlamaCppBenchmarkRunner:
 
         fn_lines_count = getattr(target_node, "end_lineno", target_node.lineno + 25) - target_node.lineno + 1
 
-        if fn_lines_count <= 45:
+        if fn_lines_count <= 150:
             ctx = self.indexer.get_clean_function_context(source_rel, task["function"])
             code_window = ctx["clean_code"]
             prefill = ctx["signature"]
@@ -110,13 +115,13 @@ class LlamaCppBenchmarkRunner:
                 source_rel, task["function"], task["description"], max_lines=45
             )
             code_window = code_slice
-            first_line = code_slice.splitlines()[0]
-            prefill = first_line.strip()
-            base_indent = len(first_line) - len(first_line.lstrip())
+            first_non_empty = next((l for l in code_slice.splitlines() if l.strip()), "")
+            prefill = first_non_empty.strip()
+            base_indent = len(first_non_empty) - len(first_non_empty.lstrip())
 
         print(f" -> Context: {e_l - s_l + 1} lines (lines {s_l}-{e_l}) with base indent {base_indent}")
 
-        # Step 5: Surgeon Generation with Auto-Thinking Policy Resolution
+        # Step 5: Surgeon Generation with Model-Aware Dispatching
         t_surg = time.time()
         sys_prompt = (
             "You are a Principal Software Engineer repairing a bug in requests.\n"
@@ -140,41 +145,68 @@ class LlamaCppBenchmarkRunner:
         )
         print(f" -> Auto-Thinking Policy: Initial Pass Think={initial_think} (Mode={self.thinking_mode})")
 
-        if initial_think:
-            full_prompt = (
-                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-                f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
-                f"<|im_start|>assistant\n<think>\n"
-            )
-            comp_res = self.client.completion(
-                prompt=full_prompt,
-                n_predict=900,
+        active_url, resolved_model = self.client.get_active_url(task_intent="synthesis", prompt=task["description"])
+        is_spark = ("spark" in resolved_model.lower())
+
+        if is_spark:
+            # Spark-X2.6-4B: uses native OpenAI chat with Jinja conversational formatting
+            scope_desc = "function" if fn_lines_count <= 150 else "code snippet"
+            chat_msgs = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt + f"\n\nOutput strictly the entire corrected {scope_desc} inside a ```python ``` block."}
+            ]
+            surge_max_toks = 1500 if fn_lines_count > 45 else 650
+            chat_res = self.client.chat(
+                messages=chat_msgs,
+                max_tokens=surge_max_toks,
                 temperature=0.0,
-                stop=["<|im_end|>", "<|endoftext|>"]
+                enable_thinking=initial_think,
+                target_model="spark"
             )
-            raw_text = comp_res.get("content", "")
+            raw_text = chat_res.get("content", "")
             blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_text, re.DOTALL)
             candidate_code = blocks[0].strip() if blocks else raw_text.strip()
-            if not candidate_code.startswith("def ") and prefill.startswith("def "):
-                candidate_code = prefill + "\n" + candidate_code
+            tokens_gen = chat_res.get("tokens", 0)
+            tok_speed = chat_res.get("tokens_per_sec", 0.0)
         else:
-            full_prompt = (
-                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-                f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
-                f"<|im_start|>assistant\n```python\n{prefill}"
-            )
-            comp_res = self.client.completion(
-                prompt=full_prompt,
-                n_predict=450,
-                temperature=0.0,
-                stop=["```", "<|im_end|>", "<|endoftext|>"]
-            )
-            candidate_code = prefill + comp_res.get("content", "")
+            # LFM3-1.7B: uses prefix pre-filling via completion endpoint
+            if initial_think:
+                full_prompt = (
+                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n<think>\n"
+                )
+                comp_res = self.client.completion(
+                    prompt=full_prompt,
+                    n_predict=900,
+                    temperature=0.0,
+                    stop=["<|im_end|>", "<|endoftext|>"],
+                    target_model="lfm3"
+                )
+                raw_text = comp_res.get("content", "")
+                blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_text, re.DOTALL)
+                candidate_code = blocks[0].strip() if blocks else raw_text.strip()
+                if not candidate_code.startswith("def ") and prefill.startswith("def "):
+                    candidate_code = prefill + "\n" + candidate_code
+            else:
+                full_prompt = (
+                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+                    f"<|im_start|>assistant\n```python\n{prefill}"
+                )
+                comp_res = self.client.completion(
+                    prompt=full_prompt,
+                    n_predict=450,
+                    temperature=0.0,
+                    stop=["```", "<|im_end|>", "<|endoftext|>"],
+                    target_model="lfm3"
+                )
+                candidate_code = prefill + comp_res.get("content", "")
+            tokens_gen = comp_res.get("tokens", 0)
+            tok_speed = comp_res.get("tokens_per_sec", 0.0)
 
         surg_latency = time.time() - t_surg
-        tokens_gen = comp_res.get("tokens", 0)
-        tok_speed = comp_res.get("tokens_per_sec", 0.0)
-        print(f" -> Generated {tokens_gen} tokens at {tok_speed} tok/s in {surg_latency:.2f}s")
+        print(f" -> Generated {tokens_gen} tokens at {tok_speed} tok/s in {surg_latency:.2f}s ({resolved_model.upper()})")
 
         # Foundational Improvement: AST Inner-Import Sanitizer
         # Eliminates hallucinated local imports emitted inside function bodies
@@ -192,14 +224,21 @@ class LlamaCppBenchmarkRunner:
 
         # Step 6: Relative AST Indentation & In-Memory AST Gate
         cand_lines = candidate_code.splitlines()
-        cand_first_indent = len(cand_lines[0]) - len(cand_lines[0].lstrip()) if cand_lines else 0
+        cand_code_lines = [l for l in cand_lines if l.strip() and not l.strip().startswith("#")]
+        if cand_code_lines:
+            cand_first_indent = len(cand_code_lines[0]) - len(cand_code_lines[0].lstrip())
+        else:
+            cand_first_indent = len(cand_lines[0]) - len(cand_lines[0].lstrip()) if cand_lines else 0
+
         aligned_lines = []
         for l in cand_lines:
             if not l.strip():
                 aligned_lines.append("\n")
+            elif l.strip().startswith("#"):
+                aligned_lines.append((" " * base_indent) + l.strip() + "\n")
             else:
                 cur_ind = len(l) - len(l.lstrip())
-                rel_ind = (cur_ind - cand_first_indent) + base_indent
+                rel_ind = max(0, (cur_ind - cand_first_indent) + base_indent)
                 aligned_lines.append((" " * rel_ind) + l.lstrip() + "\n")
 
         new_module_code = "".join(file_lines[:s_l - 1]) + "".join(aligned_lines) + "".join(file_lines[e_l:])
@@ -240,36 +279,56 @@ class LlamaCppBenchmarkRunner:
             )
             print(f" -> Auto-Thinking Policy: Self-Healing Think={retry_think}")
 
-            if retry_think:
-                repair_prompt = (
-                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-                    f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
-                    f"<|im_start|>assistant\n<think>\n"
-                )
-                heal_res = self.client.completion(
-                    prompt=repair_prompt,
-                    n_predict=900,
+            if is_spark:
+                scope_desc = "function" if fn_lines_count <= 150 else "code snippet"
+                heal_msgs = [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": repair_user + f"\n\nOutput strictly the entire corrected {scope_desc} inside a ```python ``` block."}
+                ]
+                heal_max_toks = 1500 if fn_lines_count > 45 else 650
+                heal_res = self.client.chat(
+                    messages=heal_msgs,
+                    max_tokens=heal_max_toks,
                     temperature=0.0,
-                    stop=["<|im_end|>", "<|endoftext|>"]
+                    enable_thinking=retry_think,
+                    target_model="spark"
                 )
                 raw_heal = heal_res.get("content", "")
                 h_blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_heal, re.DOTALL)
                 heal_code = h_blocks[0].strip() if h_blocks else raw_heal.strip()
-                if not heal_code.startswith("def ") and prefill.startswith("def "):
-                    heal_code = prefill + "\n" + heal_code
             else:
-                repair_prompt = (
-                    f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
-                    f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
-                    f"<|im_start|>assistant\n```python\n{prefill}"
-                )
-                heal_res = self.client.completion(
-                    prompt=repair_prompt,
-                    n_predict=450,
-                    temperature=0.0,
-                    stop=["```", "<|im_end|>", "<|endoftext|>"]
-                )
-                heal_code = prefill + heal_res.get("content", "")
+                if retry_think:
+                    repair_prompt = (
+                        f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                        f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
+                        f"<|im_start|>assistant\n<think>\n"
+                    )
+                    heal_res = self.client.completion(
+                        prompt=repair_prompt,
+                        n_predict=900,
+                        temperature=0.0,
+                        stop=["<|im_end|>", "<|endoftext|>"],
+                        target_model="lfm3"
+                    )
+                    raw_heal = heal_res.get("content", "")
+                    h_blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", raw_heal, re.DOTALL)
+                    heal_code = h_blocks[0].strip() if h_blocks else raw_heal.strip()
+                    if not heal_code.startswith("def ") and prefill.startswith("def "):
+                        heal_code = prefill + "\n" + heal_code
+                else:
+                    repair_prompt = (
+                        f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                        f"<|im_start|>user\n{repair_user}\n<|im_end|>\n"
+                        f"<|im_start|>assistant\n```python\n{prefill}"
+                    )
+                    heal_res = self.client.completion(
+                        prompt=repair_prompt,
+                        n_predict=450,
+                        temperature=0.0,
+                        stop=["```", "<|im_end|>", "<|endoftext|>"],
+                        target_model="lfm3"
+                    )
+                    heal_code = prefill + heal_res.get("content", "")
             try:
                 h_tree = ast.parse(heal_code)
                 if len(h_tree.body) == 1 and isinstance(h_tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -280,14 +339,21 @@ class LlamaCppBenchmarkRunner:
             except Exception:
                 pass
             heal_lines = heal_code.splitlines()
-            heal_first_indent = len(heal_lines[0]) - len(heal_lines[0].lstrip()) if heal_lines else 0
+            heal_code_lines = [l for l in heal_lines if l.strip() and not l.strip().startswith("#")]
+            if heal_code_lines:
+                heal_first_indent = len(heal_code_lines[0]) - len(heal_code_lines[0].lstrip())
+            else:
+                heal_first_indent = len(heal_lines[0]) - len(heal_lines[0].lstrip()) if heal_lines else 0
+
             aligned_heal = []
             for l in heal_lines:
                 if not l.strip():
                     aligned_heal.append("\n")
+                elif l.strip().startswith("#"):
+                    aligned_heal.append((" " * base_indent) + l.strip() + "\n")
                 else:
                     cur_ind = len(l) - len(l.lstrip())
-                    rel_ind = (cur_ind - heal_first_indent) + base_indent
+                    rel_ind = max(0, (cur_ind - heal_first_indent) + base_indent)
                     aligned_heal.append((" " * rel_ind) + l.lstrip() + "\n")
 
             heal_module_code = "".join(file_lines[:s_l - 1]) + "".join(aligned_heal) + "".join(file_lines[e_l:])
