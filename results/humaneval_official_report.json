@@ -1,0 +1,211 @@
+{
+  "benchmark": "OpenAI HumanEval",
+  "model": "lfm3:latest",
+  "num_problems": 20,
+  "passed_count": 12,
+  "failed_count": 8,
+  "pass_rate_pct": 60.0,
+  "total_wall_time_sec": 145.8,
+  "detailed_results": [
+    {
+      "task_id": "HumanEval/0",
+      "entry_point": "has_close_elements",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 14) (<string>, line 14)",
+      "elapsed_sec": 36.308,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement the function `has_close_elements` that takes a list of floats and a threshold (float), and returns True if there exist any two elements in the list whose absolute difference is le...",
+      "extracted_code": "def has_close_elements(numbers: List[float], threshold: float) -> bool:\n\nWe'll implement accordingly.\n\nPotential pitfalls: threshold could be negative? Probably assume non-negative. Also floating point comparisons fine.\n\nWrite code inside triple backticks? The instruction says \"Return ONLY valid, executable Python code for the function.\" So we should output just the code block containing the function definition.\n\nLet's craft:\n\npython\nfrom typing import List\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    # Create a sorted copy to avoid modifying original list\n    sorted_nums = sorted(numbers)\n    # Iterate over adjacent pairs\n    for i in range(len(sorted_nums) - 1):\n        if sorted_nums[i+1] - sorted_nums[i"
+    },
+    {
+      "task_id": "HumanEval/1",
+      "entry_point": "separate_paren_groups",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 24) (<string>, line 24)",
+      "elapsed_sec": 26.32,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement `separate_paren_groups` that takes a string `paren_string`. The description says it contains multiple groups of nested parentheses. We should separate them into individual strings...",
+      "extracted_code": "from typing import List\n\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n\nWe need to implement `separate_paren_groups` that takes a string `paren_string`. The description says it contains multiple groups of nested parentheses. We should separate them into individual strings representing each group. Groups are balanced (properly closed parentheses) and not nested within each other? Wait: \"Separate groups are balanced (each open brace is properly closed) and not nested within each other\". That seems contradictory: \"not nested within each other\" meaning they are at top-level? Let's parse example:\n\nInput: '( ) (( )) (( )( ))'\n\nBut note there are spaces inside. They say ignore any spaces in the input string. So we need to strip spaces or ignore them when parsing.\n\nThe expected output: \n>>> separate_paren_groups('( ) (( )) (( )( ))')\n['()', '(())', '(()())']\n\nLet's examine the input string: \"( ) (( )) (( )( ))\"\n\nIf we remove spaces: \"( )\" becomes \"()\", then \"(( ))\" becomes \"(())\"? Actually \"(( ))\" with spaces around parentheses: \"(( ))\" after removing spaces becomes \"(())\"? Let's see: original: \"(( ))\" includes two opening parentheses, space, two closing parentheses? Usually \"(( ))\" means outer parentheses contain inner pair. But let's break down:\n\nOriginal: \"( ) (( )) (( )( ))\"\nIndices:\n- First part: \"( )\" => characters: '(' , space, ')' . Removing spaces yields \"()\".\n- Second part: \"(( ))\" => characters: '(', '(', space, ')', space, ')'? Actually \"(( ))\" maybe has two opening parentheses, space, two closing parentheses. After removing spaces: \"(( ))\" -> \"(( ))\" without spaces = \"(()?)\"? Let's write exactly: \"(( ))\" - there is an extra space before the closing parentheses? Hard to know. But likely they intend three groups: first group: empty parentheses? Actually \"( )\" is just \"()\" which is a group. Next group: \"(( ))\" corresponds to \"(())\"? Because \"(( ))\" would be two opens, then close both? Typically \"(())\" is one open, then another open, then close inner, then close outer. In text representation: \"(( ))\" might represent \"(())\" but with spaces. Similarly third group: \"(( )( ))\" maybe is \"(()())\"? Let's check: \"(( )( ))\": This could be grouping: outer parentheses contain \"()\" and \"()\" separated by space? Or something like \"(()())\"? Let's try to map: \"(( )( ))\" ignoring spaces gives \"((()()))\"? Not sure.\n\nGiven expected outputs: For input \"( ) (( )) (( )( ))\" we get result list: ['()', '(())', '(()())'].\n\nThus mapping:\n- Group1: \"( )\" -> \"()\"\n- Group2: \"(( ))\" -> \"(())\"\n- Group3: \"(( )( ))\" -> \"(()())\"\n\nSo indeed second group is \"(())\". Third group is \"(()())\". How does \"(( )( ))\" become \"(()())\"? Let's reconstruct: Without spaces: \"(()( ))\"? Actually \"(( )( ))\" if we remove all spaces: \"((()()))\"? No. Let's think: The pattern \"(( )( ))\" can be seen as outer parentheses containing two sub-groups: \"(\" + \"()\" + \")\"? Hmm.\n\nBetter to treat the whole input as a concatenation of groups separated by nothing? The problem states: \"Your goal is to separate those group into separate strings and return the list of those.\" So we need to split the input string into substrings where each substring represents a balanced parenthesis group. Balanced groups are not nested within each other; i.e., they are at the same level? Means the input consists of concatenated balanced parentheses sequences"
+    },
+    {
+      "task_id": "HumanEval/2",
+      "entry_point": "truncate_number",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 9.215,
+      "eval_count": 730,
+      "raw_output_sample": "To solve this problem, we need to return the decimal part of a given positive floating-point number. The decimal part is defined as the leftover after removing the integer part. For example, if the in...",
+      "extracted_code": "def truncate_number(number: float) -> float:\n    \"\"\"\n    Given a positive floating point number, return the decimal part (the part after the decimal point).\n    \n    Parameters:\n    - number: a positive float\n    \n    Returns:\n        The fractional part of the number (number - int(number))\n    \"\"\"\n    return number - int(number)"
+    },
+    {
+      "task_id": "HumanEval/3",
+      "entry_point": "below_zero",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 16.368,
+      "eval_count": 564,
+      "raw_output_sample": "We need to implement the function `below_zero` which takes a list of integers `operations`. These represent deposits (positive numbers) and withdrawals (negative numbers). The account starts with a ba...",
+      "extracted_code": "def below_zero(operations: List[int]) -> bool:\n    balance = 0\n    for operation in operations:\n        balance += operation\n        if balance < 0:\n            return True\n    return False"
+    },
+    {
+      "task_id": "HumanEval/4",
+      "entry_point": "mean_absolute_deviation",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 36.854,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement the function `mean_absolute_deviation` that takes a list of floats and returns the mean absolute deviation from the mean. The formula is:\n\nMAD = (1/n) * sum(|x_i - mean|)\n\nSteps:\n...",
+      "extracted_code": "def mean_absolute_deviation(numbers: List[float]) -> float:\n    n = len(numbers)\n    if n == 0:\n        return 0.0  # or could return None, but type hint says float. So 0.0 is acceptable? Not sure. \n    mean_val = sum(numbers) / n\n    total_abs_diff = 0.0\n    for num in numbers:\n        total_abs_diff += abs(num - mean_val)\n    return total_abs_diff / n"
+    },
+    {
+      "task_id": "HumanEval/5",
+      "entry_point": "intersperse",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 17) (<string>, line 17)",
+      "elapsed_sec": 39.656,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement the function `intersperse` that takes a list of integers `numbers` and an integer `delimiter`. The goal is to insert the delimiter between every two consecutive elements in the in...",
+      "extracted_code": "def intersperse(numbers: List[int], delimeter: int) -> List[int]: # note spelling \"delimeter\" vs \"delimiter\"? In docstring they wrote 'delimeter' missing 'i'? They wrote: \"Insert a number 'delimeter' between...\". Probably typo. Parameter name is `delimeter`? In signature they used `delimeter:`? Let's check: Provided signature: def intersperse(numbers: List[int], delimeter: int) -> List[int]: Wait, they wrote \"delimeter\" in the description but parameter name maybe \"delimiter\"? Need to match exactly. Look at the prompt: \n\n\ndef intersperse(numbers: List[int], delimeter: int) -> List[int]:\n\n\nYes, they typed \"delimeter\" without 'i'. So we must use that exact variable name. However typical English uses \"delimiter\". But we follow the provided snippet. Let's re-read:\n\nThe user message:\n\n\nfrom typing import List\n\n\ndef interspase(numbers: List[int], delimeter:"
+    },
+    {
+      "task_id": "HumanEval/6",
+      "entry_point": "parse_nested_parens",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 30) (<string>, line 30)",
+      "elapsed_sec": 39.68,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement `parse_nested_parens` that takes a string `paren_string`. The input consists of multiple groups of parentheses separated by spaces. Each group is like a separate expression with p...",
+      "extracted_code": "from typing import List\n\n\ndef parse_nested_parens(paren_string: str) -> List[int]:\n    \"\"\" Input to this function is a string represented multiple groups for nested parentheses separated by spaces.\n    For each of the group, output the deepest level of nesting of parentheses.\n    E.g. (()()) has maximum two levels of nesting while ((())) has three.\n\n    >>> parse_nested_parens('(()()) ((())) () ((())()())')\n    [2, 3, 1, 3]\n    \"\"\"\n\nWe need to implement `parse_nested_parens` that takes a string `paren_string`. The input consists of multiple groups of parentheses separated by spaces. Each group is like a separate expression with parentheses. We must return a list of integers representing the deepest level of nesting in each group.\n\nFor example:\n- Input: '(()()) ((())) () ((())()())'\n- Output: [2, 3, 1, 3]\n\nLet's break down the examples:\n\n1. Group \"(()())\": \n   - This is: '(' then '(', then ')', then '(', then ')', then ')'? Actually let's count properly.\n   - String: \"(()())\"\n     - Index: 0:'(', 1:'(', 2:')', 3:'(', 4:')', 5:')'? Wait, \"(()())\" length 6.\n     - Let's parse: \n        - Start at depth 0.\n        - At index0: '(' -> depth=1\n        - index1: '(' -> depth=2 (max so far 2)\n        - index2: ')' -> depth=1\n        - index3: '(' -> depth=2\n        - index4: ')' -> depth=1\n        - index5: ')' -> depth=0\n      So max depth = 2. That matches output first element 2.\n\n2. Group \"(())\":\n   - Actually second group is \"((()))\". But wait the example says: \"((()))\" gives 3. In the overall string: \"((())) () ((())()())\". Let's split by space: \n     - \"(()())\", \"((()))\", \"()\", \"((())()())\"? Wait original: '(()()) ((())) () ((())()())' -> splitting yields four tokens: \n       - token1: \"(()())\"\n       - token2: \"((()))\"\n       - token3: \"()\"\n       - token4: \"((())()())\"\n\nBut we need to get outputs: [2, 3, 1, 3] as per example. So:\n- token1: \"(()())\" -> deepest 2 -> correct.\n- token2: \"((()))\" -> deepest 3 -> correct.\n- token3: \"()\" -> deepest 1 -> correct.\n- token4: \"((())()())\" -> deepest 3? Let's check: \"((())()())\". Counting: \n   - It starts with '(' -> depth1\n   - Next '(' -> depth2\n   - Then '('? Actually \"((())()())\" can be broken: \n     - Characters: \n       0: '(' -> d=1\n       1: '(' -> d=2\n       2: ')' -> d=1\n       3: '(' -> d=2\n       4: ')' -> d=1\n       5: '(' -> d=2? Wait there might be more. Let's write clearly: \"((())()())\"\n         Indices: \n           0: '('\n           1: '('\n           2: '('? No, it's \"((())()())\". Let's expand: \n             - Outer: '('\n               - Inside: '(())' which itself contains one pair inside? Actually \"((())\" means: open, open, close, close, open? Hmm.\n         Better to just compute using algorithm: track current depth and max depth when encountering '(' increment, on ')' decrement. For \"((())()())\":\n           - char1: '(' => depth=1, max=1\n           - char2: '(' => depth=2, max=2\n           - char3: '('? Wait third character? Let's write the string exactly: \"((())()())\". Write positions:\n             0:"
+    },
+    {
+      "task_id": "HumanEval/7",
+      "entry_point": "filter_by_substring",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 38.295,
+      "eval_count": 694,
+      "raw_output_sample": "We need to implement the function `filter_by_substring` which takes two arguments:\n- `strings`: a list of strings\n- `substring`: a string to search for within each element\n\nThe goal is to return a new...",
+      "extracted_code": "def filter_by_substring(strings: List[str], substring: str) -> List[str]:\n    return [s for s in strings if substring in s]"
+    },
+    {
+      "task_id": "HumanEval/8",
+      "entry_point": "sum_product",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 33.593,
+      "eval_count": 415,
+      "raw_output_sample": "To solve this problem, we need to create a function that takes a list of integers and returns a tuple containing two values: the sum of all elements in the list and the product of all elements in the ...",
+      "extracted_code": "def sum_product(numbers: List[int]) -> Tuple[int, int]:\n    total_sum = 0\n    total_product = 1\n    for num in numbers:\n        total_sum += num\n        total_product *= num\n    return (total_sum, total_product)"
+    },
+    {
+      "task_id": "HumanEval/9",
+      "entry_point": "rolling_max",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 31) (<string>, line 31)",
+      "elapsed_sec": 33.898,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement the function `rolling_max` that takes a list of integers and returns a new list where each element at index `i` is the maximum value from the start of the list up to and including...",
+      "extracted_code": "from typing import List, Tuple\n\n\ndef rolling_max(numbers: List[int]) -> List[int]:\n    \"\"\" From a given list of integers, generate a list of rolling maximum element found until given moment\n    in the sequence.\n    >>> rolling_max([1, 2, 3, 2, 3, 4, 2])\n    [1, 2, 3, 3, 3, 4, 4]\n    \"\"\"\n\nWe need to implement the function `rolling_max` that takes a list of integers and returns a new list where each element at index `i` is the maximum value from the start of the list up to and including index `i`. This is essentially computing the running maximum (or prefix max) of the input list.\n\nFor example:\n- Input: `[1, 2, 3, 2, 3, 4, 2]`\n- Output: `[1, 2, 3, 3, 3, 4, 4]`\n\nExplanation:\n- At index 0: max(1) = 1\n- Index 1: max(1, 2) = 2\n- Index 2: max(1, 2, 3) = 3\n- Index 3: max(1, 2, 3, 2) = 3\n- Index 4: max(1, 2, 3, 2, 3) = 3? Wait, but the output shows 3 at index 4? Let's check: \n  Actually, after index 3 (value 2), we have next value 3 at index 4. The max so far would be max(previous max=3, current=3) = 3. So yes, it remains 3.\n- Index 5: value 4, max becomes 4.\n- Index 6: value 2, max remains 4? But output says 4. However, the expected output has 4 at index 6. That matches because max(1,2,3,2,3,4,2)=4.\n\nSo algorithm: iterate through numbers, keep track of current maximum, append to result.\n\nImplementation steps:\n- Initialize an empty list `result`.\n- Set `current_max` to maybe the first element? Or handle empty input?\n- For each number in `numbers`:\n   - If it's the first iteration or number > current_max, update current_max to number.\n   - Append current_max to result.\n\nBut careful: In the loop, we should compare with previous current_max. We can do:\n\n\nif not numbers:\n    return []\nresult = []\ncurrent_max = numbers[0]\nresult.append(current_max)\nfor num in numbers[1:]:\n    if num > current_max:\n        current_max = num\n    result.append(current_max)\n\n\nHowever, this only works if we set initial current_max correctly. Alternatively, we can just maintain current_max as we go without pre-initializing with first element by using a variable that starts as negative infinity? But since inputs are integers, we could use float('-inf') but then first element will be updated properly. Simpler: initialize current_max = None, and for each num in numbers: if current_max is None or num > current_max: current_max = num; result.append(current_max). That handles all cases.\n\nLet's test with sample:\n\nnumbers = [1,2,3,2,3,4,2]\n\nInitialize result=[], current_max=None\n\nIterate:\nnum=1: current_max is None => set current_max=1, append 1 -> result=[1]\nnum=2: 2>1 => current_max=2, append 2 -> [1,2]\nnum=3: 3>2 => current_max=3, append 3 -> [1,2,3]\nnum=2: 2<3 => no change, append 3 -> [1,2,3,3]\nnum=3: 3==3? Not greater, so no change, append 3 -> [1,2,3,3,3]\nnum=4: 4>3 => current_max=4, append 4 -> [1,2,3,3,3,"
+    },
+    {
+      "task_id": "HumanEval/10",
+      "entry_point": "make_palindrome",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 45) (<string>, line 45)",
+      "elapsed_sec": 34.118,
+      "eval_count": 800,
+      "raw_output_sample": "We need to complete the `make_palindrome` function. The goal is to find the shortest palindrome that starts with the given string. The algorithm described:\n\n- Find the longest suffix (postfix) of the ...",
+      "extracted_code": "\n\ndef is_palindrome(string: str) -> bool:\n    \"\"\" Test if given string is a palindrome \"\"\"\n    return string == string[::-1]\n\n\ndef make_palindrome(string: str) -> str:\n    \"\"\" Find the shortest palindrome that begins with a supplied string.\n    Algorithm idea is simple:\n    - Find the longest postfix of supplied string that is a palindrome.\n    - Append to the end of the string reverse of a string prefix that comes before the palindromic suffix.\n    >>> make_palindrome('')\n    ''\n    >>> make_palindrome('cat')\n    'catac'\n    >>> make_palindrome('cata')\n    'catac'\n    \"\"\"\n\nWe need to complete the `make_palindrome` function. The goal is to find the shortest palindrome that starts with the given string. The algorithm described:\n\n- Find the longest suffix (postfix) of the input string that is already a palindrome.\n- Then, we need to append the reverse of the remaining prefix (the part before this palindromic suffix) to the original string to make the whole thing a palindrome.\n\nLet's break down with examples:\n\nExample 1: \nInput: `'cat'`\n- Check suffixes: \n  - Full string 'cat': not palindrome ('cat' vs 'tac').\n  - Suffix starting from last char: 't' -> palindrome? Yes, but it's just one char. But we want the longest suffix that is a palindrome.\n  - Actually, we look for the longest suffix that reads same forwards and backwards. For 'cat', the entire string isn't palindrome. Let's check suffixes:\n    - Last character: 't' -> palindrome (single char).\n    - Last two chars: 'at' -> not palindrome.\n    - Last three chars: 'cat' -> not palindrome.\n  So the longest palindromic suffix is 't'? That seems too short. Wait, maybe I misunderstood.\n\nBut the example says: `make_palindrome('cat')` returns `'catac'`.\n\nHow does that work?\nOriginal: 'cat'\nTo make a palindrome starting with 'cat', we can take 'cat' + reverse of the non-palindromic prefix? \n\nActually, let's see: 'catac' = 'cat' + 'ac'. How did they get 'ac'? Reverse of 'ca'? Not exactly.\n\nAlternative approach: We want the shortest palindrome that has 'cat' as its beginning. One way is to find the longest prefix of the reversed string that matches a suffix of the original? Or something like that.\n\nStandard method for \"shortest palindrome by adding characters in front\" or \"by appending at end\"? Here we are asked to \"begin with a supplied string\". So we need to produce a palindrome such that the given string is at the start. In the example, 'cat' becomes 'catac'. Notice that 'catac' is a palindrome? Let's check: 'catac' reversed is 'cata c'? Actually, 'catac' reversed is 'c a t a c'? Write: 'catac' -> letters: c a t a c. Reversed: c a t a c -> same! So yes, 'catac' is palindrome. And it starts with 'cat'.\n\nSo how was 'catac' formed? Original 'cat' plus 'ac'? Where does 'ac' come from? It's the reverse of 'ca'? Hmm.\n\nAnother example: `make_palindrome('cata')` returns `'catac'`? Wait, the docstring shows: \n>>> make_palindrome('cata')\n'catac'\n\nThat seems odd because 'cata' is different. Let's test: Input 'cata'. Output 'catac'. Does 'catac' start with 'cata'? No, 'catac' starts with 'cat', not 'cata'. Something off. Maybe there's a typo? Let's re-evaluate.\n\nGiven the description: \"Find the longest postfix of supplied string that is a palindrome.\" For 'cata':\n- String: 'cata'\n- Postfixes: \n  - full: 'cata' -> not palindrome (reverse 'atac')\n  - last 3: 'ata' -> palindrome? 'ata' reversed is 'ata' -> yes.\n  - last 2: 'ta' -> not palindrome.\n  - last 1: 'a' -> palindrome.\nSo longest palindromic postfix is 'ata' (starting at index 1? Actually 'cata' indices: 0:c,1:a,2:t,"
+    },
+    {
+      "task_id": "HumanEval/11",
+      "entry_point": "string_xor",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 27.584,
+      "eval_count": 157,
+      "raw_output_sample": "```python\nfrom typing import List\n\ndef string_xor(a: str, b: str) -> str:\n    \"\"\"Perform binary XOR on the input strings a and b (consisting of '0's and '1's) and return the result as a string.\"\"\"\n   ...",
+      "extracted_code": "def string_xor(a: str, b: str) -> str:\n    \"\"\"Perform binary XOR on the input strings a and b (consisting of '0's and '1's) and return the result as a string.\"\"\"\n    # Ensure both strings are of equal length by padding with leading zeros if necessary\n    max_len = max(len(a), len(b))\n    a_padded = a.zfill(max_len)\n    b_padded = b.zfill(max_len)\n    \n    result = []\n    for char_a, char_b in zip(a_padded, b_padded):\n        if char_a == char_b:\n            result.append('0')\n        else:\n            result.append('1')\n    \n    return ''.join(result)"
+    },
+    {
+      "task_id": "HumanEval/12",
+      "entry_point": "longest",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 23.395,
+      "eval_count": 74,
+      "raw_output_sample": "```python\nfrom typing import List, Optional\n\ndef longest(strings: List[str]) -> Optional[str]:\n    if not strings:\n        return None\n    max_length = -1\n    result = \"\"\n    for s in strings:\n       ...",
+      "extracted_code": "def longest(strings: List[str]) -> Optional[str]:\n    if not strings:\n        return None\n    max_length = -1\n    result = \"\"\n    for s in strings:\n        if len(s) > max_length:\n            max_length = len(s)\n            result = s\n    return result"
+    },
+    {
+      "task_id": "HumanEval/13",
+      "entry_point": "greatest_common_divisor",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 14.901,
+      "eval_count": 131,
+      "raw_output_sample": "```python\ndef greatest_common_divisor(a: int, b: int) -> int:\n    \"\"\" Return a greatest common divisor of two integers a and b\"\"\"\n    while b != 0:\n        a, b = b, a % b\n    return abs(a)\n```\n\nThis ...",
+      "extracted_code": "def greatest_common_divisor(a: int, b: int) -> int:\n    \"\"\" Return a greatest common divisor of two integers a and b\"\"\"\n    while b != 0:\n        a, b = b, a % b\n    return abs(a)"
+    },
+    {
+      "task_id": "HumanEval/14",
+      "entry_point": "all_prefixes",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 5.542,
+      "eval_count": 58,
+      "raw_output_sample": "```python\nfrom typing import List\n\ndef all_prefixes(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string \"\"\"\n    return [string[:i] for i in rang...",
+      "extracted_code": "def all_prefixes(string: str) -> List[str]:\n    \"\"\" Return list of all prefixes from shortest to longest of the input string \"\"\"\n    return [string[:i] for i in range(1, len(string) + 1)]"
+    },
+    {
+      "task_id": "HumanEval/15",
+      "entry_point": "string_sequence",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 4.227,
+      "eval_count": 50,
+      "raw_output_sample": "```python\ndef string_sequence(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\"\"\"\n    return ' '.join(str(i) for i in range(n + 1))\n```",
+      "extracted_code": "def string_sequence(n: int) -> str:\n    \"\"\" Return a string containing space-delimited numbers starting from 0 upto n inclusive.\"\"\"\n    return ' '.join(str(i) for i in range(n + 1))"
+    },
+    {
+      "task_id": "HumanEval/16",
+      "entry_point": "count_distinct_characters",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 13.251,
+      "eval_count": 800,
+      "raw_output_sample": "To solve this problem, we need to determine the number of distinct characters in a given string, ignoring case differences. This means that uppercase and lowercase versions of the same character shoul...",
+      "extracted_code": "def count_distinct_characters(string: str) -> int:\n    return len(set(string.lower()))"
+    },
+    {
+      "task_id": "HumanEval/17",
+      "entry_point": "parse_music",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 34) (<string>, line 34)",
+      "elapsed_sec": 21.862,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement `parse_music` that takes a string `music_string`. The input string represents musical notes in a special ASCII format. We must return a list of integers indicating the number of b...",
+      "extracted_code": "from typing import List\n\n\ndef parse_music(music_string: str) -> List[int]:\n    \"\"\" Input to this function is a string representing musical notes in a special ASCII format.\n    Your task is to parse this string and return list of integers corresponding to how many beats does each\n    not last.\n\n    Here is a legend:\n    'o' - whole note, lasts four beats\n    'o|' - half note, lasts two beats\n    '.|' - quater note, lasts one beat\n\n    >>> parse_music('o o| .| o| o| .| .| .| .| o o')\n    [4, 2, 1, 2, 2, 1, 1, 1, 1, 4, 4]\n    \"\"\"\n\nWe need to implement `parse_music` that takes a string `music_string`. The input string represents musical notes in a special ASCII format. We must return a list of integers indicating the number of beats each \"not last\" note? Let's read the description carefully.\n\nThe example:\n\n>>> parse_music('o o| .| o| o| .| .| .| .| o o')\n[4, 2, 1, 2, 2, 1, 1, 1, 1, 4, 4]\n\nWait, there is something off. The input string appears to have spaces separating tokens. But also includes characters like '.' and '|'. Let's parse the example step by step.\n\nInput: `'o o| .| o| o| .| .| .| .| o o'`\n\nBut we need to see exactly what tokens are present. The given string: \n- First token: 'o'\n- Then space\n- Next token: 'o|'? Actually after first 'o', there is a space then 'o|'? Wait let's break down the string as typed: \n\n`'o o| .| o| o| .| .| .| .| .| o o'`\n\nLet's rewrite with indices:\n\nPositions (including spaces):\n0: 'o'\n1: space\n2: 'o|'\n3: space\n4: '.'? Actually it's \".|\"? There's a dot before pipe? In the text: `.|` maybe means a period and pipe? The legend says:\n- 'o' - whole note, lasts four beats\n- 'o|' - half note, lasts two beats\n- '.|' - quater note, lasts one beat\n\nSo tokens can be:\n- 'o' (no trailing pipe)\n- 'o|' (half note)\n- '.|' (quarter note)\n\nThus the input contains these tokens separated by spaces. So we need to split on whitespace to get individual tokens.\n\nNow count beats per token according to legend:\n- If token == 'o': beats = 4\n- If token == 'o|': beats = 2\n- If token == '.|': beats = 1\n\nBut wait, the example output length: For input tokens, they gave output list of length 11. Let's count tokens in the example input.\n\nInput: `'o o| .| o| o| .| .| .| .| .| o o'`\n\nLet's separate tokens by spaces:\n\nToken list:\n1. 'o'\n2. 'o|'\n3. '.|'\n4. 'o|'\n5. 'o|'\n6. '.|'\n7. '.|'\n8. '.|'\n9. '.|'\n10. '.|'\n11. 'o'\n12. 'o'\n\nThat's 12 tokens? Let's recount more precisely.\n\nOriginal string: \"o o| .| o| o| .| .| .| .| .| o o\"\n\nWrite them out:\n\n- Token1: \"o\"\n- Token2: \"o|\" (since there is no space between o and |? Actually original has \"o|\". Yes.)\n- Token3: \".|\" (there is a leading dot)\n- Token4: \"o|\"\n- Token5: \"o|\"\n- Token6: \".|\"\n- Token7: \".|\"\n- Token8: \".|\"\n- Token9: \".|\"\n- Token10: \".|\"\n- Token11: \"o\"\n- Token12: \"o\"\n\nBut I'm not entirely sure about ordering; but anyway.\n\nIf we compute beats for each token using above mapping:\n\n- 'o' => 4\n- 'o|' => 2\n- '.|' => 1\n\nNow assign:"
+    },
+    {
+      "task_id": "HumanEval/18",
+      "entry_point": "how_many_times",
+      "passed": true,
+      "error": null,
+      "elapsed_sec": 29.021,
+      "eval_count": 637,
+      "raw_output_sample": "To solve this problem, we need to count how many times a given substring appears within a main string, including overlapping occurrences. The key here is to consider every possible starting position i...",
+      "extracted_code": "def how_many_times(string: str, substring: str) -> int:\n    if not string or not substring:\n        return 0\n    count = 0\n    sub_len = len(substring)\n    for i in range(len(string) - sub_len + 1):\n        if string[i:i+sub_len] == substring:\n            count += 1\n    return count"
+    },
+    {
+      "task_id": "HumanEval/19",
+      "entry_point": "sort_numbers",
+      "passed": false,
+      "error": "failed: unterminated string literal (detected at line 29) (<string>, line 29)",
+      "elapsed_sec": 38.194,
+      "eval_count": 800,
+      "raw_output_sample": "We need to implement the function `sort_numbers` that takes a string `numbers` which is space-delimited words representing numbers (like \"zero\", \"one\", etc.). The goal is to return a new string where ...",
+      "extracted_code": "def sort_numbers(numbers: str) -> str:\n    # mapping list\n    words = ['zero','one','two','three','four','five','six','seven','eight','nine']\n    # split input\n    tokens = numbers.split()\n    # create list of tuples (index, original_word)\n    indexed = [(words.index(token), token) for token in tokens]\n    # sort by index\n    indexed.sort(key=lambda x: x[0])\n    # extract sorted tokens\n    sorted_tokens = [token for _, token in indexed]\n    return ' '.join(sorted_tokens)\n\n\nBut note: Using `words.index(token)` will raise ValueError if token not found. Assume valid.\n\nComplexities: O(N log N) due to sort.\n\nLet's test with sample: numbers='three one five'. tokens = ['three','one','five']; words.index('three')=3; index('one')=1; index('five')=5. Indexed list: [(3,'three'), (1,'one'), (5,'five')]. After sorting by first element: [(1,'one'), (3,'three'), (5,'five')] -> tokens extracted: ['one','three','five']. Join => 'one three five'. Works.\n\nPotential pitfalls: If input contains multiple spaces or leading/trailing spaces, split() handles it.\n\nImplement exactly as requested:"
+    }
+  ]
+}

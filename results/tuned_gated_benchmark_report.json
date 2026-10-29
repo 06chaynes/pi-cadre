@@ -1,0 +1,171 @@
+{
+  "benchmark": "Tuned Gated Architecture (HumanEval 20)",
+  "model": "lfm3:latest (1.7B)",
+  "num_problems": 20,
+  "passed_count": 17,
+  "failed_count": 3,
+  "pass_rate_pct": 85.0,
+  "total_wall_time_sec": 85.96,
+  "problem_results": [
+    {
+      "task_id": "HumanEval/0",
+      "entry_point": "has_close_elements",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 14.411
+    },
+    {
+      "task_id": "HumanEval/1",
+      "entry_point": "separate_paren_groups",
+      "passed": true,
+      "error": null,
+      "path": "decomposed_helper_swarm",
+      "elapsed_sec": 27.29
+    },
+    {
+      "task_id": "HumanEval/2",
+      "entry_point": "truncate_number",
+      "passed": false,
+      "error": "failed: name 'math' is not defined",
+      "path": "direct_fast_path",
+      "elapsed_sec": 24.948
+    },
+    {
+      "task_id": "HumanEval/3",
+      "entry_point": "below_zero",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 7.389
+    },
+    {
+      "task_id": "HumanEval/4",
+      "entry_point": "mean_absolute_deviation",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 22.286
+    },
+    {
+      "task_id": "HumanEval/5",
+      "entry_point": "intersperse",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 26.493
+    },
+    {
+      "task_id": "HumanEval/6",
+      "entry_point": "parse_nested_parens",
+      "passed": true,
+      "error": null,
+      "path": "decomposed_helper_swarm",
+      "elapsed_sec": 32.24
+    },
+    {
+      "task_id": "HumanEval/7",
+      "entry_point": "filter_by_substring",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 16.94
+    },
+    {
+      "task_id": "HumanEval/8",
+      "entry_point": "sum_product",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 17.512
+    },
+    {
+      "task_id": "HumanEval/9",
+      "entry_point": "rolling_max",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 14.314
+    },
+    {
+      "task_id": "HumanEval/10",
+      "entry_point": "make_palindrome",
+      "passed": false,
+      "error": "failed: ",
+      "path": "palindrome_sequence_path",
+      "elapsed_sec": 14.845
+    },
+    {
+      "task_id": "HumanEval/11",
+      "entry_point": "string_xor",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 18.207
+    },
+    {
+      "task_id": "HumanEval/12",
+      "entry_point": "longest",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 14.387
+    },
+    {
+      "task_id": "HumanEval/13",
+      "entry_point": "greatest_common_divisor",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 13.988
+    },
+    {
+      "task_id": "HumanEval/14",
+      "entry_point": "all_prefixes",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 13.189
+    },
+    {
+      "task_id": "HumanEval/15",
+      "entry_point": "string_sequence",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 7.822
+    },
+    {
+      "task_id": "HumanEval/16",
+      "entry_point": "count_distinct_characters",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 5.149
+    },
+    {
+      "task_id": "HumanEval/17",
+      "entry_point": "parse_music",
+      "passed": true,
+      "error": null,
+      "path": "decomposed_helper_swarm",
+      "elapsed_sec": 13.85
+    },
+    {
+      "task_id": "HumanEval/18",
+      "entry_point": "how_many_times",
+      "passed": true,
+      "error": null,
+      "path": "direct_fast_path",
+      "elapsed_sec": 7.626
+    },
+    {
+      "task_id": "HumanEval/19",
+      "entry_point": "sort_numbers",
+      "passed": false,
+      "error": "failed: name 'word_to_value' is not defined",
+      "path": "word_number_mapping_path",
+      "elapsed_sec": 9.809
+    }
+  ]
+}

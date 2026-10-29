@@ -1,0 +1,191 @@
+{
+  "benchmark": "HumanEval 20-Problem Canonical Suite",
+  "model": "lfm3:latest (1.7B)",
+  "num_problems": 20,
+  "passed_count": 10,
+  "failed_count": 10,
+  "pass_rate_pct": 50.0,
+  "total_wall_time_sec": 125.62,
+  "problem_results": [
+    {
+      "task_id": "HumanEval/0",
+      "entry_point": "has_close_elements",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 12 (<string>, line 13)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def has_close_elements(numbers: List[float], threshold: float) -> bool:\ndef main():\n    print(\"Hello, World!\")\n    return \"success\"\n\nif __name__ == \"_..."
+    },
+    {
+      "task_id": "HumanEval/1",
+      "entry_point": "separate_paren_groups",
+      "passed": false,
+      "error": "failed: ",
+      "path": "decomposed_multi_pass",
+      "repaired": false,
+      "code_sample": "def separate_paren_groups(paren_string: str) -> List[str]:\n    # Remove all spaces from the input string\n    s = paren_string.replace(\" \", \"\")\n\n    re..."
+    },
+    {
+      "task_id": "HumanEval/2",
+      "entry_point": "truncate_number",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def truncate_number(number):\n    integer_part = int(number) # for positive numbers this equals floor\n    return number - integer_part..."
+    },
+    {
+      "task_id": "HumanEval/3",
+      "entry_point": "below_zero",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def below_zero(operations: List[int]) -> bool:\n    balance = 0\n    for op in operations:\n        balance += op\n        if balance < 0:\n            ret..."
+    },
+    {
+      "task_id": "HumanEval/4",
+      "entry_point": "mean_absolute_deviation",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 13 (<string>, line 14)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def mean_absolute_deviation(numbers: List[float]) -> float:\ndef fix_error():\n    import python\n    # The original code had `python` as an undefined va..."
+    },
+    {
+      "task_id": "HumanEval/5",
+      "entry_point": "intersperse",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 11 (<string>, line 12)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def intersperse(numbers: List[int], delimeter: int) -> List[int]:\ndef process_numbers(numbers):\n    if len(numbers) == 0:\n        return []\n\n    resul..."
+    },
+    {
+      "task_id": "HumanEval/6",
+      "entry_point": "parse_nested_parens",
+      "passed": true,
+      "error": null,
+      "path": "decomposed_multi_pass",
+      "repaired": false,
+      "code_sample": "def parse_nested_parens(paren_string: str) -> List[int]:\n\n    groups = paren_string.split()\n    results = []\n\n    for group in groups:\n        max_dep..."
+    },
+    {
+      "task_id": "HumanEval/7",
+      "entry_point": "filter_by_substring",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def filter_by_substring(strings: List[str], substring: str) -> List[str]:\n\n    return [s for s in strings if substring in s]..."
+    },
+    {
+      "task_id": "HumanEval/8",
+      "entry_point": "sum_product",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def sum_product(numbers: List[int]) -> Tuple[int, int]:\n    total_sum = 0\n    total_product = 1\n    for num in numbers:\n        total_sum += num\n     ..."
+    },
+    {
+      "task_id": "HumanEval/9",
+      "entry_point": "rolling_max",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def rolling_max(numbers: List[int]) -> List[int]:\n    if not numbers:\n        return []\n\n    result = []\n    current_max = numbers[0]\n    result.appen..."
+    },
+    {
+      "task_id": "HumanEval/10",
+      "entry_point": "make_palindrome",
+      "passed": false,
+      "error": "failed: ",
+      "path": "decomposed_multi_pass",
+      "repaired": false,
+      "code_sample": "def make_palindrome(string: str) -> str:\n\n    def make_palindrome(s: str) -> str:\n        if not s:\n            return ''\n\n        # Find the longest ..."
+    },
+    {
+      "task_id": "HumanEval/11",
+      "entry_point": "string_xor",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 10 (<string>, line 26)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def string_xor(s1, s2):\n    # Ensure both strings are of equal length by padding or truncating?\n    # The example shows '010' XOR '110' -> '100'.\n    ..."
+    },
+    {
+      "task_id": "HumanEval/12",
+      "entry_point": "longest",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 14 (<string>, line 15)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def longest(strings: List[str]) -> Optional[str]:\ndef process_data(data):\n    result = []\n    for item in data:\n        if item > 0:\n            proce..."
+    },
+    {
+      "task_id": "HumanEval/13",
+      "entry_point": "greatest_common_divisor",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def greatest_common_divisor(a: int, b: int) -> int:\n\n    while b != 0:\n        a, b = b, a % b\n    return abs(a)..."
+    },
+    {
+      "task_id": "HumanEval/14",
+      "entry_point": "all_prefixes",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 9 (<string>, line 10)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def all_prefixes(string: str) -> List[str]:\ndef some_function():\n    pass\n\npython = None  # Placeholder to avoid NameError; actual logic should replac..."
+    },
+    {
+      "task_id": "HumanEval/15",
+      "entry_point": "string_sequence",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def string_sequence(n: int) -> str:\n\n    return ' '.join(str(i) for i in range(n + 1))..."
+    },
+    {
+      "task_id": "HumanEval/16",
+      "entry_point": "count_distinct_characters",
+      "passed": true,
+      "error": null,
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def count_distinct_characters(string: str) -> int:\n\n    return len(set(string.lower()))..."
+    },
+    {
+      "task_id": "HumanEval/17",
+      "entry_point": "parse_music",
+      "passed": true,
+      "error": null,
+      "path": "decomposed_multi_pass",
+      "repaired": false,
+      "code_sample": "def parse_music(music_string: str) -> List[int]:\n    tokens = music_string.strip().split()\n    result = []\n    for token in tokens:\n        if token =..."
+    },
+    {
+      "task_id": "HumanEval/18",
+      "entry_point": "how_many_times",
+      "passed": false,
+      "error": "failed: ",
+      "path": "single_pass_healed",
+      "repaired": false,
+      "code_sample": "def how_many_times(string: str, substring: str) -> int:\n    if not substring: # empty substring? Usually infinite? But per example, return 0 for empty..."
+    },
+    {
+      "task_id": "HumanEval/19",
+      "entry_point": "sort_numbers",
+      "passed": false,
+      "error": "failed: expected an indented block after function definition on line 11 (<string>, line 12)",
+      "path": "single_pass_healed",
+      "repaired": true,
+      "code_sample": "def sort_numbers(numbers: str) -> str:\ndef fix_code():\n    # The original code had an IndentationError at line 30, likely due to missing or incorrect ..."
+    }
+  ]
+}

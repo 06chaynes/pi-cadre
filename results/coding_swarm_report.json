@@ -1,0 +1,65 @@
+{
+  "test_name": "Common Coding Assistant Swarm",
+  "total_time_sec": 21.09,
+  "total_tokens": 1614,
+  "tasks": [
+    {
+      "success": true,
+      "content": "```python\ndef binary_search(arr, target):\n    low = 0\n    high = len(arr) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1\n```\n\nThe original had `high = len(arr)` which caused an out-of-bounds access when `mid` pointed to index `len(arr)`, and also skipped the last element. The fix sets `high = len(arr) - 1` so the search range is `[0, len(arr)-1]`, matching standard inclusive bounds. In the `else` branch, we now set `high = mid - 1` instead of `high = mid` to correctly exclude the middle element.\n\n```python\ndef binary_search(arr, target):\n    low = 0\n    high = len(arr) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1\n```",
+      "thinking": "",
+      "elapsed_sec": 13.132,
+      "eval_count": 276,
+      "prompt_eval_count": 124,
+      "tokens_per_sec": 79.43,
+      "error": null,
+      "task_id": "code-bug-fix",
+      "task_name": "Bug Localization and Fix"
+    },
+    {
+      "success": true,
+      "content": "The current implementation is O(N\u00b2) because it compares each pair of elements. We can achieve O(N) by leveraging a hash set (Python's `set`) to track seen items while iterating once.\n\nHere\u2019s the refactored version:\n\n```python\ndef find_duplicates(items):\n    seen = set()\n    duplicates = set()  # Use a set to avoid adding the same duplicate multiple times\n    \n    for item in items:\n        if item in seen:\n            duplicates.add(item)\n        else:\n            seen.add(item)\n    \n    return list(duplicates)\n```\n\n**How it works:**\n- Iterate through `items` only once (`O(N)`).\n- `seen` stores all items we've encountered so far.\n- If an item is already in `seen`, it means we found its second occurrence \u2192 add to `duplicates`.\n- Using a separate `set` for `duplicates` ensures we don't add the same value more than once even if it appears three or more times.\n\n**Time Complexity:** O(N)  \n**Space Complexity:** O(N) for the two sets\n\nThis replaces the nested loop with a single pass over the data.",
+      "thinking": "",
+      "elapsed_sec": 3.106,
+      "eval_count": 240,
+      "prompt_eval_count": 115,
+      "tokens_per_sec": 79.56,
+      "error": null,
+      "task_id": "code-refactoring",
+      "task_name": "Algorithmic Refactoring & Complexity Reduction"
+    },
+    {
+      "success": true,
+      "content": "```python\nfrom typing import Dict\n\ndef calculate_portfolio_weights(holdings: Dict[str, float], prices: Dict[str, float]) -> Dict[str, float]:\n    \"\"\"\n    Compute the weight of each holding in a portfolio.\n\n    Parameters\n    ----------\n    holdings : dict[str, float]\n        Mapping from ticker symbol to number of shares held.\n    prices : dict[str, float]\n        Mapping from ticker symbol to current price per share.\n\n    Returns\n    -------\n    dict[str, float]\n        Mapping from ticker symbol to its proportion of the total market value\n        in the portfolio. The weights sum to 1.0.\n\n    Notes\n    -----\n    The total market value is computed as ``sum(holdings[ticker] * prices[ticker] for ticker in holdings)``.\n    Each weight is then ``(holdings[ticker] * prices[ticker]) / total_value``.\n    \"\"\"\n    total_value = sum(holdings.get(ticker, 0) * prices.get(ticker, 0) for ticker in holdings)\n    if total_value == 0:\n        raise ValueError(\"Total portfolio value cannot be zero.\")\n    return {\n        ticker: (holdings.get(ticker, 0) * prices.get(ticker, 0)) / total_value\n        for ticker in holdings\n    }\n```\n\n**Key changes:**\n\n- Added `Dict` imports from `typing`.\n- Annotated both parameters (`holdings`, `prices`) with their expected types \u2014 `dict[str, float]`.\n- Returned type annotated as `Dict[str, float]`.\n- Included a full Google-style docstring covering purpose, parameters, return value, and edge-case handling (zero total value).\n- Replaced the inline generator expression inside `total` with a single comprehension that also handles missing keys gracefully via `.get()`.\n- Added an explicit check for `total_value == 0` to avoid division by zero and raise a clear error.",
+      "thinking": "",
+      "elapsed_sec": 18.331,
+      "eval_count": 405,
+      "prompt_eval_count": 100,
+      "tokens_per_sec": 80.08,
+      "error": null,
+      "task_id": "code-type-docs",
+      "task_name": "Docstring & Strict Type Annotations"
+    },
+    {
+      "success": true,
+      "content": "```python\nimport pytest\nfrom dataclasses import dataclass\n\n# Minimal implementation of the TokenBucket for testing purposes\nclass TokenBucket:\n    def __init__(self, capacity: int, fill_rate: float):\n        self.capacity = capacity\n        self.fill_rate = fill_rate\n        self._tokens = capacity\n        self._last_update = self._reset()\n\n    def _reset(self):\n        self._tokens = self.capacity\n        self._last_update = None\n\n    def consume(self, tokens: int = 1) -> bool:\n        if self._tokens >= tokens:\n            self._tokens -= tokens\n            return True\n        else:\n            # Refill based on elapsed time since last update\n            now = pytest.time()  # placeholder; replace with real clock or use simple logic\n            # For deterministic testability, we'll assume linear refill over some interval.\n            # In production, use time.monotonic().\n            # Here we just check behavior via mocked time or simple decrement.\n            return False\n\n    @property\n    def remaining(self):\n        return max(0, self._tokens)\n\n    def wait_for_refill(self, delay: float = 0.0) -> None:\n        \"\"\"Simulate waiting until enough tokens have been added.\"\"\"\n        pass\n\n\n# Since the above is not fully functional without real time, we define a simpler interface\n# that matches typical usage patterns for such limiters.\n\n@pytest.fixture\ndef bucket(capacity=10, fill_rate=2.0):\n    return TokenBucket(capacity, fill_rate)\n\n\nclass TestTokenBucketNormalConsumption:\n    def test_consume_tokens_successfully(self):\n        b = TokenBucket(5, 1.0)\n        assert b.consume() is True\n        assert b.remaining == 4\n\n    def test_consume_all_tokens(self):\n        b = TokenBucket(3, 1.0)\n        assert b.consume() is True\n        assert b.consume() is True\n        assert b.consume() is False\n        assert b.remaining == 0\n\n\nclass TestTokenBucketThrottlingDepleted:\n    def test_consume_fails_when_empty(self):\n        b = TokenBucket(2, 1.0)\n        assert b.consume() is True\n        assert",
+      "thinking": "",
+      "elapsed_sec": 9.506,
+      "eval_count": 500,
+      "prompt_eval_count": 96,
+      "tokens_per_sec": 79.95,
+      "error": null,
+      "task_id": "code-unit-tests",
+      "task_name": "Test Suite Generation"
+    }
+  ],
+  "peer_review": {
+    "success": true,
+    "content": "- **Correctness validation:** Yes, the fix addresses both issues: setting `high = len(arr) - 1` ensures the search space remains within valid indices (`[0, len(arr)-1]`), preventing out-of-bounds access when `mid` could equal `len(arr)`. Additionally, in the `else` branch, using `high = mid - 1` correctly excludes the middle element from further consideration, preserving the invariant that `arr[low..high]` contains the remaining candidates.\n  \n- **Code safety & style note:** While the logic is sound, consider replacing `(low + high) // 2` with `low + (high - low) // 2` to avoid potential integer overflow in languages where `int` overflows for large ranges; however, this is not critical in Python due to arbitrary-precision integers. Also, adding a docstring clarifying parameter types and return value would improve maintainability.",
+    "thinking": "",
+    "elapsed_sec": 2.753,
+    "eval_count": 193,
+    "prompt_eval_count": 356,
+    "tokens_per_sec": 79.65,
+    "error": null
+  }
+}

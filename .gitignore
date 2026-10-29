@@ -1,0 +1,23 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python Bytecode and Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Large External Cloned Codebases (can be cloned as needed)
+requests_repo/
+
+# OS-Specific Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local scratch directory
+scratch/
