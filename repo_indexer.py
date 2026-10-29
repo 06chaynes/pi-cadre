@@ -168,3 +168,66 @@ class RepoASTIndexer:
 
         slice_text = "".join(code_lines[win_start - 1 : win_end])
         return slice_text, win_start, win_end, True
+
+    def get_module_imports(self, rel_path: str) -> List[str]:
+        """
+        Extracts all top-level module import statements via AST.
+        """
+        full_path = os.path.join(self.repo_root, rel_path)
+        with open(full_path, "r", encoding="utf-8") as fp:
+            tree = ast.parse(fp.read())
+        return [ast.unparse(n) for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+
+    def get_clean_function_context(self, rel_path: str, function_name: str) -> Dict[str, Any]:
+        """
+        Extracts AST-clean function context:
+        - Strips distracting multi-line English docstrings to prevent token drift in 1.7B models
+        - Isolates function signature and base indentation level
+        - Gathers visible module imports to eliminate hallucinated imports
+        """
+        import textwrap
+        full_path = os.path.join(self.repo_root, rel_path)
+        with open(full_path, "r", encoding="utf-8") as fp:
+            full_code = fp.read()
+        file_lines = full_code.splitlines(True)
+        file_tree = ast.parse(full_code)
+
+        target_node = None
+        for node in ast.walk(file_tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
+                target_node = node
+                break
+
+        if not target_node:
+            raise ValueError(f"Function {function_name} not found in {rel_path}")
+
+        fn_start = target_node.lineno
+        fn_end = getattr(target_node, "end_lineno", fn_start + 25)
+        raw_lines = file_lines[fn_start - 1 : fn_end]
+        raw_code = "".join(raw_lines)
+
+        base_indent = len(raw_lines[0]) - len(raw_lines[0].lstrip())
+        dedented = textwrap.dedent(raw_code)
+
+        # Parse dedented node to cleanly remove docstring
+        parsed_fn = ast.parse(dedented).body[0]
+        doc = ast.get_docstring(parsed_fn)
+        if doc and len(parsed_fn.body) > 1:
+            doc_node = parsed_fn.body[0]
+            d_lines = dedented.splitlines(True)
+            clean_fn = "".join(d_lines[:doc_node.lineno - 1] + d_lines[doc_node.end_lineno:])
+        else:
+            clean_fn = dedented
+
+        signature = clean_fn.strip().splitlines()[0]
+        imports = self.get_module_imports(rel_path)
+
+        return {
+            "clean_code": clean_fn.strip(),
+            "docstring": doc,
+            "signature": signature,
+            "base_indent": base_indent,
+            "start_line": fn_start,
+            "end_line": fn_end,
+            "module_imports": "\n".join(imports)
+        }

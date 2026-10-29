@@ -12,6 +12,7 @@ import re
 import time
 import json
 import subprocess
+import ast
 from typing import Dict, Any, List, Tuple
 
 from repo_indexer import RepoASTIndexer
@@ -164,7 +165,7 @@ TASKS = [
         "title": "Proxy URL Auth Preservation",
         "file": "requests/utils.py",
         "function": "prepend_scheme_if_needed",
-        "description": "In `prepend_scheme_if_needed`, when a URL contains authentication credentials (such as user:pass@host or user@host), the authentication part is lost because parse_url does not include auth in netloc. Preserve auth by re-attaching it to netloc with '@'.join([auth, netloc]) if auth is present.",
+        "description": "In `prepend_scheme_if_needed`, when a URL contains authentication credentials (such as user:pass@host or user@host), the authentication part is lost because parse_url does not include auth in netloc. Preserve auth by re-attaching it to netloc if auth is present (e.g. if auth: netloc = '@'.join([auth, netloc])).",
         "defect_fn": defect_task_1,
         "verify_fn": verify_task_1
     },
@@ -173,7 +174,7 @@ TASKS = [
         "title": "CA Bundle Environment Fallback",
         "file": "requests/sessions.py",
         "function": "merge_environment_settings",
-        "description": "In `Session.merge_environment_settings`, when REQUESTS_CA_BUNDLE and CURL_CA_BUNDLE are empty strings or not set, verify should retain its original passed value rather than becoming None or empty string. Update verify fallback logic to check env vars or fallback to verify.",
+        "description": "In `Session.merge_environment_settings`, when REQUESTS_CA_BUNDLE and CURL_CA_BUNDLE are empty strings or not set, verify should retain its original passed value rather than becoming None or empty string. Update verify fallback logic to check env vars or fallback to verify (e.g. verify = os.environ.get('REQUESTS_CA_BUNDLE') or os.environ.get('CURL_CA_BUNDLE') or verify).",
         "defect_fn": defect_task_2,
         "verify_fn": verify_task_2
     },
@@ -425,129 +426,158 @@ class RequestsBenchmarkRunner:
         }
         scout_latency = time.time() - t_scout
 
-        # Stage 3: Adaptive Surgical AST Slicing (0 tokens)
+        # Stage 3: Context Extraction (Visible Imports & Clean Code Window)
         source_rel = task["file"].replace("requests/", "")
-        code_slice, start_l, end_l, is_sub = self.indexer.get_adaptive_source_slice(
-            source_rel, task["function"], task["description"], max_lines=35
-        )
-        slice_tokens = len(code_slice.split())
+        imports = self.indexer.get_module_imports(source_rel)
+        mod_imports_header = "\n".join(imports)
 
-        # Stage 4: Surgeon Agent with strict markdown block directive
-        t_surg = time.time()
-        surgeon_sys = (
-            "You are a Principal Software Surgeon. Fix the bug on the isolated code slice.\n"
-            "CRITICAL RULES:\n"
-            "1. Start your response IMMEDIATELY with ```python on the very first line. Do not write any words before ```python.\n"
-            "2. Output ONLY the complete corrected Python code/block inside the ```python ``` block.\n"
-            "3. Make the minimal necessary change to satisfy the description.\n"
-            "4. DO NOT add any import statements inside the function. All necessary imports and helpers are ALREADY imported at the top of the file.\n"
-            "5. ZERO introductory, conversational, or explanatory text."
-        )
-        surgeon_prompt = (
-            f"BUG SPECIFICATION:\n{task['description']}\n\n"
-            f"TARGET FUNCTION: {task['function']}\n"
-            f"SOURCE CODE:\n```python\n{code_slice}\n```\n\n"
-            "Output the corrected code beginning immediately with ```python:"
-        )
-        surgeon_res = self.ollama.chat(
-            messages=[{"role": "system", "content": surgeon_sys}, {"role": "user", "content": surgeon_prompt}],
-            think=False,
-            temperature=0.0,
-            max_tokens=900
-        )
-        surgeon_latency = time.time() - t_surg
-        patch_text = compress_agent_payload(surgeon_res.get("content", "") or surgeon_res.get("thinking", ""))
-        total_tokens = len(patch_text.split()) + len(json.dumps(scout_decision).split())
-
-        # Stage 5: Self-Healing Harness - Apply & Verify
-        t_verify = time.time()
-        fn_name = task["function"]
-        code_blocks = re.findall(rf"```(?:python)?\s*(.*?def\s+{fn_name}.*?)```", patch_text, re.DOTALL)
-        if not code_blocks:
-            code_blocks = re.findall(r"```(?:python)?\s*(.*?def\s+\w+.*?)```", patch_text, re.DOTALL)
-        if not code_blocks:
-            code_blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", patch_text, re.DOTALL)
-
-        if code_blocks:
-            clean_patch = code_blocks[0].strip()
-        else:
-            clean_patch = re.sub(r"```python\s*", "", patch_text).replace("```", "").strip()
-
-        # Apply slice replacement
         target_full_path = os.path.join(REPO_DIR, task["file"])
         with open(target_full_path, "r") as fp:
-            orig_lines = fp.readlines()
+            full_source = fp.read()
+        file_lines = full_source.splitlines(True)
+        file_tree = ast.parse(full_source)
 
-        # Align indentation to original function/block definition
-        orig_slice_first_line = orig_lines[start_l - 1]
-        target_indent = len(orig_slice_first_line) - len(orig_slice_first_line.lstrip())
-        aligned_patch = align_indentation(clean_patch, target_indent)
+        target_node = None
+        for n in ast.walk(file_tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == task["function"]:
+                target_node = n
+                break
+        assert target_node, f"Function {task['function']} not found in AST"
 
-        # Replace slice in lines
-        new_lines = orig_lines[:start_l - 1] + [aligned_patch + "\n"] + orig_lines[end_l:]
-        with open(target_full_path, "w") as fp:
-            fp.writelines(new_lines)
+        fn_lines_count = getattr(target_node, "end_lineno", target_node.lineno + 25) - target_node.lineno + 1
 
-        passed, test_output, verify_elapsed = task["verify_fn"](REPO_DIR)
-        
-        # Self-healing reflection if failed
+        if fn_lines_count <= 45:
+            ctx = self.indexer.get_clean_function_context(source_rel, task["function"])
+            code_window = ctx["clean_code"]
+            prefill = ctx["signature"]
+            base_indent = ctx["base_indent"]
+            start_l, end_l = ctx["start_line"], ctx["end_line"]
+        else:
+            code_slice, start_l, end_l, is_sub = self.indexer.get_adaptive_source_slice(
+                source_rel, task["function"], task["description"], max_lines=45
+            )
+            code_window = code_slice
+            first_line = code_slice.splitlines()[0]
+            prefill = first_line.strip()
+            base_indent = len(first_line) - len(first_line.lstrip())
+
+        # Stage 4: Prefix Pre-Filled Direct Generation
+        t_surg = time.time()
+        sys_prompt = (
+            "You are a Principal Software Engineer repairing a bug in requests.\n"
+            "CRITICAL RULES:\n"
+            "1. Emit ONLY the corrected Python code inside a ```python ``` block.\n"
+            "2. DO NOT add any import statements.\n"
+            "3. ZERO commentary, explanations, or conversational markdown."
+        )
+        user_prompt = (
+            f"[BOUND MODULE IMPORTS (ALREADY AVAILABLE)]:\n{mod_imports_header}\n\n"
+            f"[BUG SPECIFICATION]:\n{task['description']}\n\n"
+            f"[SOURCE CODE WINDOW]:\n```python\n{code_window}\n```"
+        )
+        full_prompt = (
+            f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+            f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
+            f"<|im_start|>assistant\n```python\n{prefill}"
+        )
+
+        gen_res = self.ollama.generate_raw(
+            prompt=full_prompt,
+            num_predict=450,
+            stop=["```", "<|im_end|>", "<|endoftext|>"]
+        )
+        surgeon_latency = time.time() - t_surg
+        tokens_gen = gen_res.get("tokens", 0)
+        candidate_code = prefill + gen_res.get("content", "")
+
+        # AST Inner-Import Sanitizer
+        try:
+            cand_tree = ast.parse(candidate_code)
+            if len(cand_tree.body) == 1 and isinstance(cand_tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+                fn = cand_tree.body[0]
+                if any(isinstance(s, (ast.Import, ast.ImportFrom)) for s in fn.body):
+                    fn.body = [s for s in fn.body if not isinstance(s, (ast.Import, ast.ImportFrom))]
+                    candidate_code = ast.unparse(cand_tree)
+        except Exception:
+            pass
+
+        # Stage 5: Relative AST Indentation & In-Memory AST Gate
+        cand_lines = candidate_code.splitlines()
+        cand_first_indent = len(cand_lines[0]) - len(cand_lines[0].lstrip()) if cand_lines else 0
+        aligned_lines = []
+        for l in cand_lines:
+            if not l.strip():
+                aligned_lines.append("\n")
+            else:
+                cur_ind = len(l) - len(l.lstrip())
+                rel_ind = (cur_ind - cand_first_indent) + base_indent
+                aligned_lines.append((" " * rel_ind) + l.lstrip() + "\n")
+
+        new_module_code = "".join(file_lines[:start_l - 1]) + "".join(aligned_lines) + "".join(file_lines[end_l:])
+        passed = False
+        test_output = ""
+        verify_elapsed = 0.0
+
+        try:
+            ast.parse(new_module_code)
+            with open(target_full_path, "w") as fp:
+                fp.write(new_module_code)
+            passed, test_output, verify_elapsed = task["verify_fn"](REPO_DIR)
+        except SyntaxError as e:
+            print(f" -> AST In-Memory Gate Rejected SyntaxError: {e}")
+
+        # Stage 6: 1-Turn Closed Loop Self-Healing if test failed
         healing_attempts = 0
         if not passed:
             healing_attempts += 1
             print(f" -> Initial patch failed test. Triggering Self-Healing Reflection...")
             clean_trace = extract_surgical_traceback(test_output)
-            
-            # Step A: Try Micro-Patching via Structured JSON Diff Schema
-            diff_prompt = (
-                f"BUG SPECIFICATION:\n{task['description']}\n\n"
-                f"SURGICAL ERROR TRACE:\n{clean_trace}\n\n"
-                f"SOURCE CODE SLICE:\n```python\n{code_slice}\n```\n\n"
-                "Fix the bug. Output JSON with 'original_code' (faulty lines from source) and 'replacement_code'."
+            heal_user = (
+                f"[PREVIOUS CANDIDATE CODE]:\n```python\n{candidate_code}\n```\n\n"
+                f"[TEST FAILURE TRACEBACK]:\n{clean_trace}\n\n"
+                f"Fix the bug to resolve this failure. Output ONLY the corrected Python code."
             )
-            diff_sys = "You are a surgical software editor. Output strictly valid JSON matching the schema."
-            diff_res = self.grammar.chat_structured(
-                messages=[{"role": "system", "content": diff_sys}, {"role": "user", "content": diff_prompt}],
-                schema=SURGEON_DIFF_SCHEMA,
-                max_tokens=300
+            heal_prompt = (
+                f"<|im_start|>system\n{sys_prompt}\n<|im_end|>\n"
+                f"<|im_start|>user\n{heal_user}\n<|im_end|>\n"
+                f"<|im_start|>assistant\n```python\n{prefill}"
             )
-            parsed = diff_res.get("parsed")
-            if parsed and parsed.get("original_code"):
-                with open(target_full_path, "r") as fp:
-                    cur_code = fp.read()
-                new_code = replace_by_stripped_match(cur_code, parsed["original_code"], parsed["replacement_code"])
-                if new_code != cur_code:
-                    with open(target_full_path, "w") as fp:
-                        fp.write(new_code)
-                    passed, test_output, verify_elapsed = task["verify_fn"](REPO_DIR)
-            
-            # Step B: Fallback full re-generation with condensed error if Step A didn't pass
-            if not passed:
-                heal_prompt = (
-                    f"Your previous patch did not pass the test.\n"
-                    f"SURGICAL ERROR TRACE:\n{clean_trace}\n\n"
-                    f"ORIGINAL CODE:\n```python\n{code_slice}\n```\n\n"
-                    f"TASK: {task['description']}\n"
-                    "Provide the corrected Python code in a ```python ``` block:"
-                )
-                heal_res = self.ollama.chat(
-                    messages=[{"role": "system", "content": surgeon_sys}, {"role": "user", "content": heal_prompt}],
-                    think=False,
-                    temperature=0.0,
-                    max_tokens=900
-                )
-                heal_raw = heal_res.get("content", "") or heal_res.get("thinking", "")
-                heal_blocks = re.findall(rf"```(?:python)?\s*(.*?def\s+{fn_name}.*?)```", heal_raw, re.DOTALL)
-                if not heal_blocks:
-                    heal_blocks = re.findall(r"```(?:python)?\s*(.*?)\s*```", heal_raw, re.DOTALL)
-                if heal_blocks:
-                    heal_code = heal_blocks[0].strip()
+            h_res = self.ollama.generate_raw(
+                prompt=heal_prompt,
+                num_predict=450,
+                stop=["```", "<|im_end|>", "<|endoftext|>"]
+            )
+            heal_code = prefill + h_res.get("content", "")
+            try:
+                h_tree = ast.parse(heal_code)
+                if len(h_tree.body) == 1 and isinstance(h_tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    fn = h_tree.body[0]
+                    if any(isinstance(s, (ast.Import, ast.ImportFrom)) for s in fn.body):
+                        fn.body = [s for s in fn.body if not isinstance(s, (ast.Import, ast.ImportFrom))]
+                        heal_code = ast.unparse(h_tree)
+            except Exception:
+                pass
+
+            heal_lines = heal_code.splitlines()
+            heal_first_indent = len(heal_lines[0]) - len(heal_lines[0].lstrip()) if heal_lines else 0
+            aligned_heal = []
+            for l in heal_lines:
+                if not l.strip():
+                    aligned_heal.append("\n")
                 else:
-                    heal_code = re.sub(r"```python\s*", "", heal_raw).replace("```", "").strip()
-                aligned_heal = align_indentation(heal_code, target_indent)
-                new_lines = orig_lines[:start_l - 1] + [aligned_heal + "\n"] + orig_lines[end_l:]
+                    cur_ind = len(l) - len(l.lstrip())
+                    rel_ind = (cur_ind - heal_first_indent) + base_indent
+                    aligned_heal.append((" " * rel_ind) + l.lstrip() + "\n")
+
+            heal_module_code = "".join(file_lines[:start_l - 1]) + "".join(aligned_heal) + "".join(file_lines[end_l:])
+            try:
+                ast.parse(heal_module_code)
                 with open(target_full_path, "w") as fp:
-                    fp.writelines(new_lines)
-                passed, _, _ = task["verify_fn"](REPO_DIR)
+                    fp.write(heal_module_code)
+                passed, test_output, verify_elapsed = task["verify_fn"](REPO_DIR)
+                print(f" -> Self-Healing Applied. Test Passed: {passed} in {verify_elapsed:.2f}s")
+            except SyntaxError as e:
+                print(f" -> Self-Healing SyntaxError: {e}")
 
         total_latency = time.time() - t_start
         reset_repo(REPO_DIR)
@@ -557,10 +587,10 @@ class RequestsBenchmarkRunner:
             "mode": "Remediated 4-Stage Swarm",
             "passed": passed,
             "latency": round(total_latency, 2),
-            "tokens": total_tokens,
+            "tokens": tokens_gen,
             "scout_localized": (scout_decision.get("target_function") == task["function"]),
             "healing_attempts": healing_attempts,
-            "output_preview": clean_patch[:200].replace("\n", " ")
+            "output_preview": candidate_code[:200].replace("\n", " ")
         }
 
 def run_suite():

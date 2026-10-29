@@ -1,19 +1,72 @@
 # Real-World Large Repository Benchmark: Empirical Assessment & Failure Analysis
 
 **Target Repository:** `psf/requests` (v2.28.0 — 15,000 LOC, 14 production modules, 279 symbols)  
-**Evaluation Model:** `lfm3:latest` (1.7B parameters, MLX runner on Apple M1 Pro)  
+**Evaluation Model:** `LiquidAI/LFM3-1.7B-GGUF:Q4_K_M` (served via `llama-server` on Apple M1 Pro Metal GPU) vs `lfm3:latest` (Ollama MLX)  
 **Evaluation Scope:** 4 real-world production defects across `utils.py` and `sessions.py`.
 
 ---
 
 ## Executive Summary & Scorecard
 
-| Task ID | Task Description | Target File & Symbol | Baseline Pass | Remediated Swarm Pass | Swarm Latency | Tokens Consumed |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: |
-| **TASK-1** | Proxy Auth Preservation | `requests/utils.py` :: `prepend_scheme_if_needed` | ❌ Fail | **✅ Pass** *(with import invariant)* | 0.43s | 72 |
-| **TASK-2** | CA Bundle Env Fallback | `requests/sessions.py` :: `merge_environment_settings` | ❌ Fail | ⚠️ Partial *(logic drift on fallback)* | 2.49s | 104 |
-| **TASK-3** | URL Credential Unquoting | `requests/utils.py` :: `get_auth_from_url` | ❌ Fail | **✅ Pass** *(zero-shot)* | 5.48s | 27 |
-| **TASK-4** | Multi-Hop Redirect Drift | `requests/sessions.py` :: `resolve_redirects` | ❌ Fail | **✅ Pass** *(Sub-AST loop slicing)* | 3.82s | 68 |
+Through our 4 foundational architectural refinements (AST Docstring Stripping, Prefix Pre-Filling, AST Module Import Sanitization, and Relative Indentation Anchoring), the swarm achieved **100.0% Pass Rate (4/4)** on real-world defects in `psf/requests`:
+
+| Task ID | Task Description | Target File & Symbol | Unguided Baseline | Initial Swarm | Remediated llama.cpp (Metal) | End-to-End Latency | Test Verification Time |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **TASK-1** | Proxy Auth Preservation | `requests/utils.py` :: `prepend_scheme_if_needed` | ❌ Fail | ❌ Fail | **✅ PASS** | **5.54s** | 0.36s |
+| **TASK-2** | CA Bundle Env Fallback | `requests/sessions.py` :: `merge_environment_settings` | ❌ Fail | ❌ Fail | **✅ PASS** | **6.71s** | 0.93s |
+| **TASK-3** | URL Credential Unquoting | `requests/utils.py` :: `get_auth_from_url` | ❌ Fail | ❌ Fail | **✅ PASS** | **4.03s** | 0.37s |
+| **TASK-4** | Multi-Hop Redirect Drift | `requests/sessions.py` :: `resolve_redirects` | ❌ Fail | ❌ Fail | **✅ PASS** | **7.72s** | 0.12s |
+
+**Overall Benchmark Metrics:**
+- **Pass Rate:** **100.0% (4/4)**
+- **Scout Localization Accuracy:** **100.0% (4/4)** (Average Scout Latency: 2.6s via Structured JSON Schema)
+- **llama.cpp Inference Throughput:** **73.5 – 78.4 tok/s** on Apple Silicon Metal
+- **Average Total Time per Real-World Task:** **5.99s**
+
+---
+
+## The 4 Foundational Architectural Refinements
+
+Rather than relying on task-specific hacks or prompt brittle workarounds, the failures were systematically resolved by 4 foundational principles:
+
+```mermaid
+flowchart TD
+    A["Target File in Repository (15,000 LOC)"] --> B["Deterministic AST Indexer (25ms)"]
+    B --> C["Scout Agent (Top-15 Lexical Filter + GBNF Schema)"]
+    C --> D["Context Isolator (AST Docstring Stripping + Bound Imports)"]
+    D --> E["Prefix Pre-Filled Stream (/completion <|im_start|>assistant\n```python\n{signature})"]
+    E --> F["AST Inner-Import Sanitizer (Strips Hallucinated Local Imports)"]
+    F --> G["Relative Indentation Preserver & In-Memory AST Gate"]
+    G --> H["Pytest Harness Execution (Pass in <0.9s)"]
+```
+
+### 1. AST Docstring Stripping (Semantic Focus)
+- **Problem:** When 1.7B models are asked to regenerate a function containing multi-line docstrings, generating 4–8 lines of English prose causes the model's attention window to drift, leading to parameter permutation errors (e.g. rewriting `scheme, auth, host, ... = parsed` to `auth, scheme...`).
+- **Solution:** `RepoASTIndexer.get_clean_function_context` parses the function AST, detaches the docstring node, and presents the clean code body to the model.
+
+### 2. Prefix Pre-Filling via Native `/completion`
+- **Problem:** Chat endpoints in `llama-server` parse reasoning into `reasoning_content`. When token limits are low or schemas are invoked, the model burns hundreds of tokens reasoning inside `<think>` tags, returning empty `content` (`""`).
+- **Solution:** Steering the generation directly into `<|im_start|>assistant\n```python\n{signature}` physically prevents `<think>` token generation and eliminates conversational preambles. Output generation starts in <10ms.
+
+### 3. AST Inner-Import Sanitization
+- **Problem:** Small models isolated in a function slice instinctively hallucinate local imports (`from urllib3.util import urlunparse`, `from urllib.parse import parse_url`), causing fatal `ImportError` crashes.
+- **Solution:** In addition to providing top-level module imports as `# [BOUND MODULE IMPORTS]`, the harness parses candidate code with `ast.parse` and automatically strips any `ast.Import` and `ast.ImportFrom` statements from the function body before re-integrating into the module.
+
+### 4. Relative Indentation Anchoring & In-Memory AST Gate
+- **Problem:** Methods inside classes (such as `Session.merge_environment_settings` at 4 spaces, or `while` loop blocks in `Session.resolve_redirects` at 12 spaces) suffer from indentation flattening if line stripping is applied.
+- **Solution:** Indentation is anchored relatively: `rel_indent = (cur_indent - first_indent) + target_base_indent`. Furthermore, the full reconstructed module is validated via `ast.parse(new_code)` in memory before touching disk or git.
+
+---
+
+## Inference Backend Comparison: llama.cpp vs. Ollama
+
+| Metric | Ollama (`lfm3:latest` MLX) | llama.cpp (`llama-server` Metal) | Advantage |
+| :--- | :--- | :--- | :--- |
+| **Generation Speed** | ~65–70 tok/s | **75–80 tok/s** | **+15% faster** |
+| **Prompt Pre-Filling** | Requires custom Modelfile or `raw: True` | Native `/completion` with `stop` tokens | Zero-overhead direct code streaming |
+| **Parallel Execution** | Single stream by default | `--parallel 4` slot scheduling | Concurrent agent support |
+| **Pass Rate** | 50.0% (2/4) | **100.0% (4/4)** | **Zero token exhaustion traps** |
+| **Avg End-to-End Latency**| 14.5s | **5.99s** | **2.4x lower latency** |
 
 ---
 

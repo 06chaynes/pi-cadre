@@ -2,32 +2,32 @@
   {
     "task_id": "TASK-1",
     "title": "Proxy URL Auth Preservation",
-    "passed": false,
-    "latency": 23.43,
+    "passed": true,
+    "latency": 5.54,
     "scout_match": true,
     "backend": "llama.cpp (Metal)"
   },
   {
     "task_id": "TASK-2",
     "title": "CA Bundle Environment Fallback",
-    "passed": false,
-    "latency": 23.99,
+    "passed": true,
+    "latency": 6.71,
     "scout_match": true,
     "backend": "llama.cpp (Metal)"
   },
   {
     "task_id": "TASK-3",
     "title": "URL Credential Unquoting",
-    "passed": false,
-    "latency": 23.21,
+    "passed": true,
+    "latency": 4.03,
     "scout_match": true,
     "backend": "llama.cpp (Metal)"
   },
   {
     "task_id": "TASK-4",
     "title": "Multi-Hop Redirect State Drift",
-    "passed": false,
-    "latency": 35.61,
+    "passed": true,
+    "latency": 7.72,
     "scout_match": true,
     "backend": "llama.cpp (Metal)"
   }

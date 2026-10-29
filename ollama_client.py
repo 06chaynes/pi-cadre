@@ -107,3 +107,57 @@ class OllamaClient:
                 "tokens_per_sec": 0.0,
                 "error": str(e)
             }
+
+    def generate_raw(
+        self,
+        prompt: str,
+        num_predict: int = 500,
+        stop: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Direct raw generation with prompt prefix pre-filling support in Ollama.
+        """
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "raw": True,
+            "stream": False,
+            "options": {
+                "num_predict": num_predict,
+                "temperature": 0.0,
+                "stop": stop or ["```", "<|im_end|>", "<|endoftext|>"]
+            }
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate",
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+        start_time = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                elapsed = time.time() - start_time
+                content = res.get("response", "")
+                eval_count = res.get("eval_count", 0)
+                eval_dur_s = res.get("eval_duration", 0) / 1e9
+                tok_per_sec = (eval_count / eval_dur_s) if eval_dur_s > 0 else 0.0
+                return {
+                    "success": True,
+                    "content": content,
+                    "elapsed_sec": round(elapsed, 3),
+                    "tokens": eval_count,
+                    "tokens_per_sec": round(tok_per_sec, 2),
+                    "error": None
+                }
+        except Exception as e:
+            elapsed = time.time() - start_time
+            return {
+                "success": False,
+                "content": "",
+                "elapsed_sec": round(elapsed, 3),
+                "tokens": 0,
+                "tokens_per_sec": 0.0,
+                "error": str(e)
+            }

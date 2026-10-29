@@ -104,6 +104,62 @@ class LlamaCppClient:
                 "error": str(e)
             }
 
+    def completion(
+        self,
+        prompt: str,
+        n_predict: int = 500,
+        temperature: float = 0.0,
+        stop: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Direct native completion endpoint with prefix pre-filling support.
+        Bypasses thinking token latency and conversational preambles.
+        """
+        payload: Dict[str, Any] = {
+            "prompt": prompt,
+            "n_predict": n_predict,
+            "temperature": temperature,
+            "stream": False
+        }
+        if stop:
+            payload["stop"] = stop
+        else:
+            payload["stop"] = ["```", "<|im_end|>", "<|endoftext|>"]
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/completion",
+            data=data,
+            headers={"Content-Type": "application/json"}
+        )
+
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                elapsed = time.time() - t0
+                content = res.get("content", "")
+                tokens = res.get("tokens_predicted", 0)
+                tok_per_sec = (tokens / elapsed) if elapsed > 0 else 0.0
+                return {
+                    "success": True,
+                    "content": content,
+                    "tokens": tokens,
+                    "elapsed_sec": round(elapsed, 3),
+                    "tokens_per_sec": round(tok_per_sec, 2),
+                    "error": None
+                }
+        except Exception as e:
+            elapsed = time.time() - t0
+            return {
+                "success": False,
+                "content": "",
+                "tokens": 0,
+                "elapsed_sec": round(elapsed, 3),
+                "tokens_per_sec": 0.0,
+                "error": str(e)
+            }
+
     def chat_structured(
         self,
         messages: List[Dict[str, str]],
