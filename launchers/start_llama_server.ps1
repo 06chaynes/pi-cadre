@@ -3,9 +3,9 @@ param (
     [int]$Port = 8080,
     [string]$HostAddress = "127.0.0.1",
     [string]$ModelId = "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
-    [int]$ParallelSlots = 4,
+    [int]$ParallelSlots = 16,
     [int]$GpuLayers = 99,
-    [int]$CtxSize = 8192
+    [int]$CtxSize = 32768
 )
 
 Write-Host "==========================================================" -ForegroundColor Cyan

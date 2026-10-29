@@ -7,9 +7,9 @@ set -e
 PORT=${PORT:-8080}
 HOST=${HOST:-"127.0.0.1"}
 MODEL_ID=${MODEL_ID:-"LiquidAI/LFM3-1.7B-GGUF:Q4_K_M"}
-PARALLEL_SLOTS=${PARALLEL_SLOTS:-4}
+PARALLEL_SLOTS=${PARALLEL_SLOTS:-16}
 N_GPU_LAYERS=${N_GPU_LAYERS:-99}
-CTX_SIZE=${CTX_SIZE:-8192}
+CTX_SIZE=${CTX_SIZE:-32768}
 
 echo "=========================================================="
 echo " Starting llama-server with LFM3-1.7B-GGUF"
