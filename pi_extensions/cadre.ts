@@ -18,7 +18,8 @@
  * review, off otherwise. Every request gets short coding rules appended to the system message.
  */
 
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -41,6 +42,8 @@ const PROVIDER = "llama-cpp";
 const ROUTER_ID = "cadre";
 // Pi's system prompt and tools take about 1,600 tokens; below this LFM3 cannot hold a turn.
 const LFM3_MIN_CONTEXT = 8192;
+// Private to the user; a shared temporary directory would let another user redirect the logs.
+const LOG_DIR = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pi-cadre");
 // The first start of a server may download its model from Hugging Face.
 const START_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -87,7 +90,7 @@ export default async function (pi: ExtensionAPI) {
   const startOffline = async (ctx: ExtensionContext, offline: ServerKey[]) => {
     for (const key of offline) {
       try {
-        const log = await startServer(key, process.env, tmpdir());
+        const log = await startServer(key, process.env, LOG_DIR);
         ctx.ui.notify(`Starting ${SERVERS[key].name} on ${serverUrl(key)} (log: ${log})`, "info");
       } catch (e) {
         ctx.ui.notify(`Could not start llama-server: ${e instanceof Error ? e.message : e}. Install llama.cpp first.`, "error");

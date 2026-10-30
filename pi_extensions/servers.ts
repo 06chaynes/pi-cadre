@@ -4,7 +4,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
+import { chmodSync, constants, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 
 export const HOST = "127.0.0.1";
@@ -93,18 +93,29 @@ export function serverArgs(key: ServerKey, env: Record<string, string | undefine
 }
 
 /**
+ * Opens `<dir>/pi-cadre-<key>.log` for appending. `dir` is created private to the user (0700) and the file is created
+ * 0600 and never opened through a symlink, so another local user cannot redirect the server's output.
+ */
+export function openLog(dir: string, key: ServerKey): { path: string; fd: number } {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const path = join(dir, `pi-cadre-${key}.log`);
+  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0);
+  return { path, fd: openSync(path, flags, 0o600) };
+}
+
+/**
  * Starts llama-server in the background, detached so it outlives Pi, with output in `<logDir>/pi-cadre-<key>.log`.
  * Resolves to the log path, or rejects when llama-server cannot be started (for example, not in PATH).
  */
 export function startServer(key: ServerKey, env: Record<string, string | undefined>, logDir: string): Promise<string> {
-  const log = join(logDir, `pi-cadre-${key}.log`);
-  const out = openSync(log, "a");
-  const child = spawn("llama-server", serverArgs(key, env), { detached: true, stdio: ["ignore", out, out] });
+  const log = openLog(logDir, key);
+  const child = spawn("llama-server", serverArgs(key, env), { detached: true, stdio: ["ignore", log.fd, log.fd] });
   return new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("spawn", () => {
       child.unref();
-      resolve(log);
+      resolve(log.path);
     });
   });
 }

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { SERVERS, modelConfigs, serverArgs } from "./servers.ts";
+import { SERVERS, modelConfigs, openLog, serverArgs } from "./servers.ts";
 
 test("models use the detected per-slot context", () => {
   const [spark, lfm3] = modelConfigs({ spark: 131072, lfm3: 8192 });
@@ -45,4 +48,20 @@ test("server arguments match the launcher defaults", () => {
 test("SPARK_MODEL and LFM3_MODEL select a local file or another Hugging Face ID", () => {
   assert.deepEqual(serverArgs("spark", { SPARK_MODEL: "/models/spark.gguf" }).slice(0, 2), ["-m", "/models/spark.gguf"]);
   assert.deepEqual(serverArgs("lfm3", { LFM3_MODEL: "org/other-GGUF:Q8_0" }).slice(0, 2), ["-hf", "org/other-GGUF:Q8_0"]);
+});
+
+test("logs go to a private directory and are never written through a symlink", (t) => {
+  const base = mkdtempSync(join(tmpdir(), "cadre-logs-"));
+  const dir = join(base, "cache", "pi-cadre");
+  const { path } = openLog(dir, "spark");
+  assert.equal(path, join(dir, "pi-cadre-spark.log"));
+  if (process.platform !== "win32") {
+    assert.equal(statSync(dir).mode & 0o777, 0o700);
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+  }
+  const victim = join(base, "victim.txt");
+  writeFileSync(victim, "keep");
+  symlinkSync(victim, join(dir, "pi-cadre-lfm3.log"));
+  if (process.platform === "win32") return t.skip("O_NOFOLLOW is POSIX-only");
+  assert.throws(() => openLog(dir, "lfm3"), /ELOOP|EMLINK/);
 });

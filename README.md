@@ -50,7 +50,7 @@ The extension registers the `llama-cpp` provider at startup. It reads each serve
 
 It also registers `llama-cpp/cadre`, a model that picks Spark or LFM3 for each prompt. LFM3 gets questions and single-spot edits (a docstring, a typo, a rename); Spark gets everything else, including anything that mentions tests, several steps, or a change to behavior. A turn stays on the model that started it, a failed LFM3 request retries on Spark, and prompts the router cannot classify go to Spark. Routing to LFM3 needs at least 8192 tokens per LFM3 slot.
 
-When Pi starts with a UI, the extension offers to start any server that is not running, and to switch to `cadre` when another provider's model is selected. With only the npm package installed, servers it starts use the launcher defaults, and `SPARK_MODEL` / `LFM3_MODEL` in the environment select local `.gguf` files or other Hugging Face IDs. They run in the background after Pi exits.
+When Pi starts with a UI, the extension offers to start any server that is not running, and to switch to `cadre` when another provider's model is selected. With only the npm package installed, servers it starts use the launcher defaults, and `SPARK_MODEL` / `LFM3_MODEL` in the environment select local `.gguf` files or other Hugging Face IDs. They keep running after Pi exits, with logs in `~/.local/state/pi-cadre` (or `$XDG_STATE_HOME/pi-cadre`).
 
 Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
