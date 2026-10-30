@@ -779,3 +779,22 @@ test("with map, the system message lists the project's files", async () => {
     else process.env.CADRE_OPTS = saved;
   }
 });
+
+test("with firstsmall, a request starts on the second model and every continuation goes to Spark", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "firstsmall";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const cadre = calls.virtual["llama-cpp/cadre"];
+    const { ctx } = uiContext(true);
+    const ask = { role: "user", content: "Add a restock_report method to Inventory and test it." };
+    assert.equal((await cadre.route({ reason: "user", thinkingLevel: "off", messages: [ask] }, ctx)).model.id, "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M");
+    const previous = { model: { id: "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M" }, thinkingLevel: "off" };
+    assert.equal((await cadre.route({ reason: "continuation", previous, thinkingLevel: "off", messages: [ask] }, ctx)).model.id, "XHToken/Spark-X2.6-4B-GGUF:Q4_K_M");
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});

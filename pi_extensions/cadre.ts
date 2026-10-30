@@ -198,6 +198,8 @@ export default async function (pi: ExtensionAPI) {
           const tokens = (await countTokens("lfm3", conversationText(messages))) + TEMPLATE_TOKENS_PER_MESSAGE * messages.length;
           if (tokens > lfm3.contextWindow - lfm3.maxTokens) lfm3 = undefined;
         }
+        // EXPERIMENT: "firstsmall" starts each request on the second model and continues on Spark.
+        if (OPTS.has("firstsmall")) return { model: request.reason === "user" && lfm3 ? lfm3 : spark, thinkingLevel: request.thinkingLevel } as any;
         return routeRequest(request, { spark, lfm3 }) as any;
       },
     });
@@ -393,6 +395,7 @@ export default async function (pi: ExtensionAPI) {
   //   recall    passages of cleared web results that match the task come back with each request
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
   //   map       the system message lists the project's files (see projectmap.ts)
+  //   firstsmall each request starts on the second model; continuations go to Spark
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
