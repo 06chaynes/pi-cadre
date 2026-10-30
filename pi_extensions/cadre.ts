@@ -71,7 +71,9 @@ const MAP_MAX_CHARS = 2000;
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
-const RECALL_TOOLS = new Set(["web_search", "web_fetch"]);
+// Web tools of @ollama/pi-web-search (web_search, web_fetch) and pi-web-access (web_search, fetch_content,
+// get_search_content).
+const RECALL_TOOLS = new Set(["web_search", "web_fetch", "fetch_content", "get_search_content"]);
 
 // The digest condenses the current request's steps before the last KEEP_STEPS, each as its call and a one-line outcome.
 const KEEP_STEPS = 3;
@@ -99,6 +101,7 @@ const MORE: Record<string, string> = {
   read: "Read again with offset and limit to see other parts.",
   bash: "Run a narrower command (grep, head, tail, sed -n) to see other parts.",
   web_fetch: "Fetch a more specific page, or search for the part you need.",
+  fetch_content: "Fetch a more specific page, or search for the part you need.",
 };
 const MORE_DEFAULT = "Call the tool again with a narrower request to see other parts.";
 // Thinking budgets per request, by reasoning effort (never more than half the reply limit).
@@ -318,8 +321,9 @@ export default async function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     // More search hits mean more of each to cut away; the tool's own default is enough for a step.
     const input = event.input as Record<string, unknown>;
-    if (event.toolName === "web_search" && typeof input.max_results === "number" && input.max_results > SEARCH_MAX_RESULTS) {
-      input.max_results = SEARCH_MAX_RESULTS;
+    // The result count is max_results in @ollama/pi-web-search and numResults in pi-web-access.
+    for (const key of ["max_results", "numResults"]) {
+      if (event.toolName === "web_search" && typeof input[key] === "number" && input[key] > SEARCH_MAX_RESULTS) input[key] = SEARCH_MAX_RESULTS;
     }
     if (!guardOn) return undefined;
     const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());

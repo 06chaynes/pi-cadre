@@ -838,3 +838,25 @@ test("an edit that leaves a file unparseable is reported in the same tool result
   writeFileSync(join(cwd, "store.py"), "def f():\n    return 1\n");
   assert.equal(await calls.handlers["tool_result"](event, { ...uiContext(true).ctx, cwd }), undefined);
 });
+
+test("pi-web-access's tools are handled like the Ollama package's: results count capped, fetched pages recalled", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "clear,recall";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const call = { toolName: "web_search", input: { queries: ["latest ML research"], numResults: 10 } };
+    await calls.handlers["tool_call"](call, uiContext(true).ctx);
+    assert.equal(call.input.numResults, 5);
+    const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Tokyo population.";
+    const page = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(400);
+    const { session, ids } = realSession([{ role: "user", content: prompt }, toolCall("f1", "fetch_content", { url: "https://x.example" }), toolResult("f1", "fetch_content", page)]);
+    session.appendContextEdit(ids[2], { content: "[fetch_content result cleared]" });
+    const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+    assert.match(JSON.stringify(result.messages[2].content), /41,024,320 digits/);
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
