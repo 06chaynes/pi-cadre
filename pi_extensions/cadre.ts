@@ -27,6 +27,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { guardReason } from "./guard.ts";
@@ -81,7 +82,26 @@ const THINKING_MODES = ["auto", "off", "minimal", "low", "medium", "high"] as co
 type ThinkingMode = (typeof THINKING_MODES)[number];
 const REASONING_PROMPT = /plan|architect|diagnose|root cause|debug|investigate|review/i;
 
+// Tool results leave context as a task goes on (see clearResults); the model keeps what it needs with this tool.
+const NOTE_TOOL = {
+  name: "note",
+  label: "Note",
+  description:
+    "Record a fact you will need later in this task, with where it came from. Tool results are cleared from context " +
+    "as a task goes on; notes are not. Use it right after reading a result that holds something you need.",
+  parameters: Type.Object({
+    fact: Type.String({ description: "The fact, with exact numbers, names, dates, or quoted text as the source gives them" }),
+    source: Type.String({ description: "URL, file and line, or command it came from" }),
+  }),
+  async execute() {
+    return { content: [{ type: "text" as const, text: "Noted." }], details: undefined };
+  },
+};
+
 const CODING_RULES = [
+  "",
+  "### NOTES:",
+  "Tool results are cleared from context as a task goes on. Right after reading a result that holds a fact you will need later, record it with the note tool.",
   "",
   "### CODING RULES:",
   "1. Emit ONLY code inside markdown blocks with exact language tags.",
@@ -171,6 +191,7 @@ export default async function (pi: ExtensionAPI) {
     });
   };
   register();
+  pi.registerTool(NOTE_TOOL);
 
   /** Starts the offline servers, then re-registers with their real contexts once each is healthy. */
   const startOffline = async (ctx: ExtensionContext, offline: ServerKey[]) => {
@@ -432,7 +453,7 @@ export default async function (pi: ExtensionAPI) {
       if (unseen.has(id)) continue;
       const note = text.match(new RegExp(`^\\[${name} result, ([\\d,]+) characters, cleared`));
       const size = note ? note[1] : text.length.toLocaleString("en-US");
-      const bare = `[${name} result, ${size} characters, cleared from context. Run ${name} again if it is needed.]`;
+      const bare = `[${name} result, ${size} characters, cleared from context. Facts you recorded with note stay in context; run ${name} again if it is needed.]`;
       if (note) {
         // An earlier extract stays while the extracts fit their budget; past it, it shrinks to the one-line note.
         if (text === bare) continue;
@@ -447,8 +468,8 @@ export default async function (pi: ExtensionAPI) {
         continue;
       }
       const extract =
-        `[${name} result, ${size} characters, cleared from context ${reason}; its opening and the lines matching its ` +
-        `call and the request are kept. Run ${name} again for the rest.]\n` +
+        `[${name} result, ${size} characters, cleared from context ${reason}. Facts you recorded with note stay in ` +
+        `context. Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
         shortenText(text, `${callArgs.get(message.toolCallId) ?? ""} ${lastPrompt}`, CLEAR_KEEP_CHARS);
       const content = noteChars + extract.length <= NOTE_BUDGET_CHARS ? extract : bare;
       noteChars += content === extract ? extract.length : 0;

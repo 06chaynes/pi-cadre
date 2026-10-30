@@ -40,6 +40,7 @@ function fakePi() {
     providers: {} as Record<string, any>,
     virtual: {} as Record<string, any>,
     commands: {} as Record<string, any>,
+    tools: {} as Record<string, any>,
     handlers: {} as Record<string, Function>,
     thinking: [] as string[],
     models: [] as any[],
@@ -48,6 +49,7 @@ function fakePi() {
     registerProvider: (name: string, config: unknown) => (calls.providers[name] = config),
     registerVirtualModel: (model: any) => (calls.virtual[`${model.provider}/${model.id}`] = model),
     registerCommand: (name: string, command: unknown) => (calls.commands[name] = command),
+    registerTool: (tool: any) => (calls.tools[tool.name] = tool),
     on: (event: string, handler: Function) => (calls.handlers[event] = handler),
     setThinkingLevel: (level: string) => calls.thinking.push(level),
     setModel: async (model: unknown) => (calls.models.push(model), true),
@@ -380,7 +382,7 @@ test("after an answered run, large tool results are replaced in the model's cont
   await extension(pi as any);
   const { session } = answeredRun(39_000);
   const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
-  assert.match(seen[2], /^\[web_search result, 39,034 characters, cleared from context after the answer; its opening and the lines matching its call and the request are kept\. Run web_search again for the rest\.\]\nSperm whales dive for 45 minutes\./);
+  assert.match(seen[2], /^\[web_search result, 39,034 characters, cleared from context after the answer\. Facts you recorded with note stay in context\. Its opening and the lines matching its call and the request are kept below; run web_search again for the rest\.\]\nSperm whales dive for 45 minutes\./);
   assert.ok(seen[2].length < 1300);
   assert.equal(seen[3], "About 45 minutes on average.");
 });
@@ -417,7 +419,7 @@ test("during a task, older tool results are cleared once the kept results pass t
   // and the result the model has not read yet stays whatever its size.
   const task = taskInProgress(10_800, 10_800, 10_800, 30_000);
   const seen = applyEdits(task.session, await calls.handlers["turn_end"](turnEnd(task), sessionContext([])));
-  assert.match(seen[2], /^\[read result, 10,807 characters, cleared from context to make room; .*\]\nfile 0 /);
+  assert.match(seen[2], /^\[read result, 10,807 characters, cleared from context to make room\. .*\]\nfile 0 /);
   assert.match(seen[4], /^\[read result, 10,807 characters, cleared/);
   assert.equal(seen[6].length, 10_807);
   assert.equal(seen[8].length, 30_007);
@@ -505,5 +507,28 @@ test("once kept extracts pass their budget, the oldest cleared results shrink to
   assert.ok(total <= 12_000 + 30 * 120, `${total} characters`);
   assert.match(results[29], /module 29/);
   assert.doesNotMatch(results[0], /module 0/);
-  assert.match(results[0], /^\[read result, [\d,]+ characters, cleared from context\. Run read again if it is needed\.\]$/);
+  assert.match(results[0], /^\[read result, [\d,]+ characters, cleared from context\. Facts you recorded with note stay in context; run read again if it is needed\.\]$/);
+});
+
+test("the note tool records a fact in the model's own context, where clearing never reaches it", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const note = calls.tools["note"];
+  assert.ok(note, "note tool registered");
+  assert.match(note.description, /cleared/);
+  const result = await note.execute("c1", { fact: "A sperm whale can spend around 90 minutes underwater.", source: "https://www.nhm.ac.uk/x" }, undefined, undefined, {});
+  assert.equal(result.content[0].text, "Noted.");
+});
+
+test("a cleared result's note points the model to its notes, and the rules say when to take them", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const { session } = answeredRun(39_000);
+  const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
+  assert.match(seen[2], /Facts you recorded with note stay in context/);
+  const system = { role: "system", content: "Pi system prompt" };
+  await calls.handlers["context_with_system"]({ messages: [system] });
+  assert.match(system.content, /note/);
 });
