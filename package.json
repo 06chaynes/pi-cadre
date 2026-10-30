@@ -21,7 +21,6 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
@@ -29,7 +28,6 @@
     "typecheck": "tsc -p ."
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@types/node": "26.6.6",
     "typescript": "7.0.2"

@@ -27,13 +27,11 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { guardReason } from "./guard.ts";
 import { isResearchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
-import { ungroundedParts } from "./notes.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { shortenText, unseenNote } from "./unseen.ts";
 import {
@@ -59,11 +57,11 @@ const RESULT_MAX_TOKENS = 8192;
 // Pi's system prompt and tool definitions are not in session entries; measured at about 2,700 tokens.
 const SYSTEM_ALLOWANCE = 4096;
 // Tool results at least this long can leave context. A cleared result keeps an extract of CLEAR_KEEP_CHARS (its
-// opening and the lines matching its call and the request) while all extracts fit NOTE_BUDGET_CHARS, newest first;
+// opening and the lines matching its call and the request) while all extracts fit EXTRACT_BUDGET_CHARS, newest first;
 // older ones shrink to a one-line note.
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
-const NOTE_BUDGET_CHARS = 12000;
+const EXTRACT_BUDGET_CHARS = 12000;
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
@@ -89,42 +87,7 @@ const THINKING_MODES = ["auto", "off", "minimal", "low", "medium", "high"] as co
 type ThinkingMode = (typeof THINKING_MODES)[number];
 const REASONING_PROMPT = /plan|architect|diagnose|root cause|debug|investigate|review/i;
 
-// Tool results leave context as a task goes on (see clearResults); the model keeps what it needs with this tool.
-// A note must be grounded (see notes.ts), and a later note on the same topic supersedes the earlier one (turn_end).
-const NOTE_TOOL = {
-  name: "note",
-  label: "Note",
-  description:
-    "Record a fact you will need later in this task, with where it came from. Tool results are cleared from context " +
-    "as a task goes on; notes are not. Use it right after reading a result that holds something you need, in the same " +
-    "response as your next tool calls. Numbers, URLs, and quotes must be as the source gives them.",
-  parameters: Type.Object({
-    topic: Type.String({ description: "Short subject, such as 'Tokyo population'. A later note on the same topic replaces this one." }),
-    fact: Type.String({ description: "The fact, with exact numbers, names, dates, or quoted text as the source gives them" }),
-    source: Type.String({ description: "URL, file and line, or command it came from" }),
-  }),
-  async execute(_id: string, params: { topic: string; fact: string; source: string }, _signal: unknown, _onUpdate: unknown, ctx: ExtensionContext) {
-    const sources = ctx.sessionManager
-      .getBranch()
-      .flatMap((entry: any) => (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName !== "note" ? [entry.message] : []))
-      .map((message: any) => message.content.map((block: any) => (block.type === "text" ? block.text : "")).join("\n"))
-      .join("\n");
-    const missing = ungroundedParts(`${params.fact} ${params.source}`, sources);
-    if (missing.length) {
-      const list = missing.join(", ");
-      throw new Error(`Not noted: ${list} ${missing.length > 1 ? "are" : "is"} not in any tool result in this session. Note only what a source says, as it says it.`);
-    }
-    return { content: [{ type: "text" as const, text: "Noted." }], details: undefined };
-  },
-};
-const NOTE_NOTICE =
-  "[This result can leave context after your next step. Record with the note tool any fact from it you will need later, in the same response as your next tool calls.]";
-const SUPERSEDED = (topic: string) => `Superseded by a later note on ${topic}.`;
-
 const CODING_RULES = [
-  "",
-  "### NOTES:",
-  "Tool results are cleared from context as a task goes on. Right after reading a result that holds a fact you will need later, record it with the note tool, in the same response as your next tool calls. Note each fact once; to correct it, note it again with the same topic.",
   "",
   "### CODING RULES:",
   "1. Emit ONLY code inside markdown blocks with exact language tags.",
@@ -214,9 +177,6 @@ export default async function (pi: ExtensionAPI) {
     });
   };
   register();
-  // EXPERIMENT ONLY: CADRE_OPTS=nonote leaves the note tool and its rule out.
-  const noteTool = !(process.env.CADRE_OPTS ?? "").split(",").includes("nonote");
-  if (noteTool) pi.registerTool(NOTE_TOOL);
 
   /** Starts the offline servers, then re-registers with their real contexts once each is healthy. */
   const startOffline = async (ctx: ExtensionContext, offline: ServerKey[]) => {
@@ -376,10 +336,6 @@ export default async function (pi: ExtensionAPI) {
       }
       content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
     }
-    // The model gets one full read of a large result before clearing may take it, so it is told while reading.
-    if (noteTool && OPTS.has("clear") && ctx.model?.provider === PROVIDER && text.length >= CLEAR_MIN_CHARS) {
-      content = [...content, { type: "text" as const, text: NOTE_NOTICE }];
-    }
     return content === event.content ? undefined : { content };
   });
 
@@ -460,7 +416,7 @@ export default async function (pi: ExtensionAPI) {
   };
 
   /**
-   * Context edits that replace large tool results with notes, newest first kept in full while their tokens fit
+   * Context edits that replace large tool results with an extract or a one-line marker, newest first kept in full while their tokens fit
    * `keepTokens`. Results in `unseen` (not yet read by the model) are always kept.
    */
   const clearResults = async (entries: readonly any[], keepTokens: number, unseen: ReadonlySet<string>, reason: string) => {
@@ -473,7 +429,7 @@ export default async function (pi: ExtensionAPI) {
     }
     const edits = [];
     let kept = 0;
-    let noteChars = 0;
+    let extractChars = 0;
     for (const projected of [...entries].reverse()) {
       const message = projected.messages[0];
       if (projected.sourceEntry.type !== "message" || message?.role !== "toolResult") continue;
@@ -481,14 +437,13 @@ export default async function (pi: ExtensionAPI) {
       const name = message.toolName;
       const text = textOf(message);
       if (unseen.has(id)) continue;
-      const note = text.match(new RegExp(`^\\[${name} result, ([\\d,]+) characters, cleared`));
-      const size = note ? note[1] : text.length.toLocaleString("en-US");
-      const noteHint = noteTool ? "Facts you recorded with note stay in context; " : "";
-      const bare = `[${name} result, ${size} characters, cleared from context. ${noteHint}run ${name} again if it is needed.]`;
-      if (note) {
-        // An earlier extract stays while the extracts fit their budget; past it, it shrinks to the one-line note.
+      const cleared = text.match(new RegExp(`^\\[${name} result, ([\\d,]+) characters, cleared`));
+      const size = cleared ? cleared[1] : text.length.toLocaleString("en-US");
+      const bare = `[${name} result, ${size} characters, cleared from context. Run ${name} again if it is needed.]`;
+      if (cleared) {
+        // An earlier extract stays while the extracts fit their budget; past it, it shrinks to the one-line marker.
         if (text === bare) continue;
-        if (noteChars + text.length <= NOTE_BUDGET_CHARS) noteChars += text.length;
+        if (extractChars + text.length <= EXTRACT_BUDGET_CHARS) extractChars += text.length;
         else edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content: bare } });
         continue;
       }
@@ -499,46 +454,24 @@ export default async function (pi: ExtensionAPI) {
         continue;
       }
       const extract =
-        `[${name} result, ${size} characters, cleared from context ${reason}. ${noteTool ? "Facts you recorded with note stay in context. " : ""}` +
+        `[${name} result, ${size} characters, cleared from context ${reason}. ` +
         `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
         shortenText(text, `${callArgs.get(message.toolCallId) ?? ""} ${lastPrompt}`, CLEAR_KEEP_CHARS);
-      const content = noteChars + extract.length <= NOTE_BUDGET_CHARS ? extract : bare;
-      noteChars += content === extract ? extract.length : 0;
+      const content = extractChars + extract.length <= EXTRACT_BUDGET_CHARS ? extract : bare;
+      extractChars += content === extract ? extract.length : 0;
       edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content } });
     }
     return edits;
   };
 
-  /** Edits that mark each note's result superseded when a later note has the same topic. */
-  const supersededNotes = (entries: readonly any[]) => {
-    const topics = new Map<string, string>();
-    for (const projected of entries) {
-      for (const message of projected.messages as any[]) {
-        if (message?.role !== "assistant") continue;
-        for (const block of message.content ?? []) if (block.type === "toolCall" && block.name === NOTE_TOOL.name) topics.set(block.id, String(block.arguments?.topic ?? ""));
-      }
-    }
-    const latest = new Map<string, string>();
-    for (const [id, topic] of topics) latest.set(topic.trim().toLowerCase(), id);
-    return entries.flatMap((projected: any) => {
-      const message = projected.messages[0];
-      if (projected.sourceEntry.type !== "message" || message?.role !== "toolResult" || message.toolName !== NOTE_TOOL.name) return [];
-      const topic = topics.get(message.toolCallId);
-      if (topic === undefined || latest.get(topic.trim().toLowerCase()) === message.toolCallId || textOf(message) === SUPERSEDED(topic)) return [];
-      return [{ type: "context_edit" as const, targetId: projected.sourceEntry.id, replacement: { content: SUPERSEDED(topic) } }];
-    });
-  };
-
   // During a task, results the model has read stay in full while they fit resultRoom (at most
   // KEPT_RESULTS_MAX_TOKENS); older ones are cleared, so a long task does not fill the window with results it has
-  // finished with. Notes replaced by a later note on the same topic are marked superseded.
+  // finished with.
   pi.on("turn_end", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
-    const edits = supersededNotes(event.context.contextEntries);
-    if (OPTS.has("clear")) {
-      const keep = Math.min(KEPT_RESULTS_MAX_TOKENS, resultRoom());
-      edits.push(...(await clearResults(event.context.contextEntries, keep, new Set(event.toolResultEntryIds), "to make room")));
-    }
+    if (!OPTS.has("clear")) return undefined;
+    const keep = Math.min(KEPT_RESULTS_MAX_TOKENS, resultRoom());
+    const edits = await clearResults(event.context.contextEntries, keep, new Set(event.toolResultEntryIds), "to make room");
     return edits.length ? { entries: edits } : undefined;
   });
 
@@ -581,40 +514,11 @@ export default async function (pi: ExtensionAPI) {
 
   // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
   // that compaction removed from context is restored in one message after the compaction summary.
+  // Passages of cleared web results that match the task come back with each request (see recallMessage).
   pi.on("context", async (event, ctx) => {
-    let messages = [...event.messages];
-    let changed = false;
-    if (OPTS.has("recall")) {
-      const recalled = recallMessage(messages, ctx);
-      if (recalled) {
-        messages.push(...recalled);
-        changed = true;
-      }
-    }
-    const visible = new Set(
-      event.messages.flatMap((message: any) =>
-        message.role === "assistant" ? message.content.filter((b: any) => b.type === "toolCall" && b.name === NOTE_TOOL.name).map((b: any) => b.id) : [],
-      ),
-    );
-    const branch = ctx.sessionManager.getBranch().flatMap((entry: any) => (entry.type === "message" ? [entry.message] : []));
-    const rejected = new Set(branch.filter((m: any) => m.role === "toolResult" && m.isError).map((m: any) => m.toolCallId));
-    const latest = new Map<string, { id: string; topic: string; fact: string; source: string }>();
-    for (const message of branch) {
-      if (message.role !== "assistant") continue;
-      for (const block of message.content ?? []) {
-        if (block.type !== "toolCall" || block.name !== NOTE_TOOL.name || rejected.has(block.id)) continue;
-        const { topic = "", fact = "", source = "" } = block.arguments ?? {};
-        latest.set(String(topic).trim().toLowerCase(), { id: block.id, topic, fact, source });
-      }
-    }
-    const lost = [...latest.values()].filter((note) => !visible.has(note.id));
-    if (lost.length) {
-      const text = ["Your notes from earlier in this task (restored after compaction):", ...lost.map((n) => `- ${n.topic}: ${n.fact} (source: ${n.source})`)].join("\n");
-      const at = messages.findIndex((m: any) => m.role !== "compactionSummary" && m.role !== "branchSummary");
-      messages.splice(at < 0 ? messages.length : at, 0, ...toolPair(NOTE_TOOL.name, { restore: lost.length }, text));
-      changed = true;
-    }
-    return changed ? { messages } : undefined;
+    if (!OPTS.has("recall")) return undefined;
+    const recalled = recallMessage(event.messages, ctx);
+    return recalled ? { messages: [...event.messages, ...recalled] } : undefined;
   });
 
   /**
@@ -664,7 +568,7 @@ export default async function (pi: ExtensionAPI) {
     const system = event.messages?.[0];
     if (system?.role === "system" && typeof system.content === "string") {
       const rules = OPTS.has("rules") ? AGENT_RULES : CODING_RULES;
-      system.content += "\n" + (noteTool ? rules : rules.replace(/### NOTES:\n[^\n]*\n\n/, ""));
+      system.content += "\n" + rules;
     }
   });
 }

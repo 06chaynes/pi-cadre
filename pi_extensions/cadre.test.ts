@@ -40,7 +40,6 @@ function fakePi() {
     providers: {} as Record<string, any>,
     virtual: {} as Record<string, any>,
     commands: {} as Record<string, any>,
-    tools: {} as Record<string, any>,
     handlers: {} as Record<string, Function>,
     thinking: [] as string[],
     models: [] as any[],
@@ -49,7 +48,6 @@ function fakePi() {
     registerProvider: (name: string, config: unknown) => (calls.providers[name] = config),
     registerVirtualModel: (model: any) => (calls.virtual[`${model.provider}/${model.id}`] = model),
     registerCommand: (name: string, command: unknown) => (calls.commands[name] = command),
-    registerTool: (tool: any) => (calls.tools[tool.name] = tool),
     on: (event: string, handler: Function) => (calls.handlers[event] = handler),
     setThinkingLevel: (level: string) => calls.thinking.push(level),
     setModel: async (model: unknown) => (calls.models.push(model), true),
@@ -382,7 +380,7 @@ test("after an answered run, large tool results are replaced in the model's cont
   await extension(pi as any);
   const { session } = answeredRun(39_000);
   const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
-  assert.match(seen[2], /^\[web_search result, 39,034 characters, cleared from context after the answer\. Facts you recorded with note stay in context\. Its opening and the lines matching its call and the request are kept below; run web_search again for the rest\.\]\nSperm whales dive for 45 minutes\./);
+  assert.match(seen[2], /^\[web_search result, 39,034 characters, cleared from context after the answer\. Its opening and the lines matching its call and the request are kept below; run web_search again for the rest\.\]\nSperm whales dive for 45 minutes\./);
   assert.ok(seen[2].length < 1300);
   assert.equal(seen[3], "About 45 minutes on average.");
 });
@@ -425,7 +423,7 @@ test("during a task, older tool results are cleared once the kept results pass t
   assert.equal(seen[8].length, 30_007);
 });
 
-test("during a task, results within the budget, other providers, and cleared notes are left alone", async () => {
+test("during a task, results within the budget, other providers, and results already cleared are left alone", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
@@ -507,132 +505,11 @@ test("once kept extracts pass their budget, the oldest cleared results shrink to
   assert.ok(total <= 12_000 + 30 * 120, `${total} characters`);
   assert.match(results[29], /module 29/);
   assert.doesNotMatch(results[0], /module 0/);
-  assert.match(results[0], /^\[read result, [\d,]+ characters, cleared from context\. Facts you recorded with note stay in context; run read again if it is needed\.\]$/);
+  assert.match(results[0], /^\[read result, [\d,]+ characters, cleared from context\. Run read again if it is needed\.\]$/);
 });
 
-test("the note tool is registered and says why it exists", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  assert.match(calls.tools["note"].description, /cleared/);
-});
-
-test("a cleared result's note points the model to its notes, and the rules say when to take them", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const { session } = answeredRun(39_000);
-  const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
-  assert.match(seen[2], /Facts you recorded with note stay in context/);
-  const system = { role: "system", content: "Pi system prompt" };
-  await calls.handlers["context_with_system"]({ messages: [system] });
-  assert.match(system.content, /note/);
-});
-
-/** Context for a tool's execute with the session's branch. */
+/** Context for a hook that reads the session's branch. */
 const toolContext = (session: SessionManager) => ({ ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session });
-
-test("the note tool refuses a fact the session's tool results do not contain, including cleared ones", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const { session } = realSession([
-    { role: "user", content: "Research Everest's height." },
-    toolCall("c1", "web_search", { query: "everest 2020 survey" }),
-    toolResult("c1", "web_search", "The 2020 China-Nepal survey measured Mount Everest at 8,848.86 metres. " + "x".repeat(5000)),
-  ]);
-  applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
-  const note = calls.tools["note"];
-  const ok = await note.execute("n1", { topic: "Everest height", fact: "8,848.86 m (2020 China-Nepal survey)", source: "web_search everest 2020 survey" }, undefined, undefined, toolContext(session));
-  assert.equal(ok.content[0].text, "Noted.");
-  await assert.rejects(
-    note.execute("n2", { topic: "Everest height", fact: "8,848.86 m (7,749.21 m above sea level)", source: "web_search" }, undefined, undefined, toolContext(session)),
-    /Not noted: 7,749\.21 is not in any tool result in this session/,
-  );
-});
-
-test("a later note on the same topic marks the earlier one superseded", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const noteCall = (id: string, fact: string) => ({ ...toolCall(id, "note", { topic: "Tokyo population", fact, source: "web_search" }) });
-  const { session } = realSession([
-    { role: "user", content: "Research Tokyo." },
-    noteCall("n1", "Tokyo metropolis: 14,192,184"),
-    toolResult("n1", "note", "Noted."),
-    noteCall("n2", "Tokyo metropolis 14,192,184; 23 wards 9,873,999"),
-    toolResult("n2", "note", "Noted."),
-  ]);
-  const seen = applyEdits(session, await calls.handlers["turn_end"](boundary(session, { type: "turn_end", toolResultEntryIds: [] }), sessionContext([])));
-  assert.equal(seen[2], "Superseded by a later note on Tokyo population.");
-  assert.equal(seen[4], "Noted.");
-});
-
-test("notes that compaction removed come back before the next request, latest per topic", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const note = (id: string, topic: string, fact: string) => toolCall(id, "note", { topic, fact, source: "web_search" });
-  const { session, ids } = realSession([
-    { role: "user", content: "Research twelve facts and write research.md" },
-    note("n1", "Largest prime", "2^136,279,841 - 1, found 2024, 41,024,320 digits"),
-    toolResult("n1", "note", "Noted."),
-    note("n2", "Whale dive", "up to 45 minutes"),
-    toolResult("n2", "note", "Noted."),
-    note("n3", "Whale dive", "around 90 minutes hunting underwater"),
-    toolResult("n3", "note", "Noted."),
-    toolCall("c1", "web_search", { query: "tokyo population" }),
-    toolResult("c1", "web_search", "Tokyo 14,192,184"),
-    note("n4", "Tokyo population", "14,192,184 (metropolis)"),
-    toolResult("n4", "note", "Noted."),
-  ]);
-  // Compaction keeps only the last search onward: the first three notes leave context.
-  session.appendCompaction("Turn context (split turn): researching twelve facts.", ids[7], 20_000);
-  const messages = session.buildSessionContext().messages;
-  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
-  const restored = result.messages.find((m: any) => m.role === "toolResult" && JSON.stringify(m.content).includes("Your notes"));
-  assert.ok(restored, "notes restored as tool output");
-  assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("Your notes")));
-  const text = JSON.stringify(restored.content);
-  assert.match(text, /Largest prime: 2\^136,279,841 - 1, found 2024, 41,024,320 digits/);
-  assert.match(text, /Whale dive: around 90 minutes hunting underwater/);
-  assert.doesNotMatch(text, /up to 45 minutes/);
-  assert.doesNotMatch(text, /Tokyo population/, "a note still in context is not repeated");
-  assert.equal(result.messages.indexOf(restored), 2, "right after the compaction summary and its call");
-  assert.equal(result.messages[1].content[0].name, "note");
-
-  const { session: plain } = realSession([{ role: "user", content: "q" }, note("n1", "t", "f"), toolResult("n1", "note", "Noted.")]);
-  assert.equal(await calls.handlers["context"]({ type: "context", messages: plain.buildSessionContext().messages }, toolContext(plain)), undefined);
-});
-
-test("a rejected note is never restored", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const { session, ids } = realSession([
-    { role: "user", content: "Research Everest" },
-    toolCall("n1", "note", { topic: "Everest", fact: "7,749.21 m", source: "web_search" }),
-    { ...toolResult("n1", "note", "Not noted: 7,749.21 is not in any tool result in this session."), isError: true },
-    toolCall("c1", "web_search", { query: "q" }),
-    toolResult("c1", "web_search", "r"),
-  ]);
-  session.appendCompaction("summary", ids[3], 10_000);
-  assert.equal(await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session)), undefined);
-});
-
-test("a large result tells the model, as it reads it, to note what it needs before the result leaves context", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Research twelve facts" }, uiContext(true).ctx);
-  const ctx = { ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, cwd: process.cwd() };
-  const event = (text: string) => ({ toolName: "web_search", toolCallId: "c1", input: { query: "q" }, content: [{ type: "text", text }], details: {} });
-  const large = await calls.handlers["tool_result"](event("The 2024 prime has 41,024,320 digits. " + "x".repeat(3000)), ctx);
-  assert.match(large.content.at(-1).text, /can leave context after your next step.*note/i);
-  assert.equal(await calls.handlers["tool_result"](event("short result"), ctx), undefined);
-  const other = await calls.handlers["tool_result"](event("y".repeat(3000)), { ...ctx, model: { provider: "ollama", id: "gemma" } });
-  assert.equal(other, undefined);
-});
 
 test("with recall, passages of cleared web results that match the task come back at the end of the request", async () => {
   const saved = process.env.CADRE_OPTS;
