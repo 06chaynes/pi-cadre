@@ -66,3 +66,14 @@ test("lines the extension added to a result are not stored", () => {
   const stored = passages({ source: "s", text }, 1000).map((p) => p.text).join("\n");
   assert.equal(stored, "The largest known prime has 41,024,320 digits.");
 });
+
+test("recall needs a passage to share at least 40% of a query's terms, and returns where each passage came from", () => {
+  const stored = [
+    { source: "a", text: "The largest known prime number has 41,024,320 decimal digits and was found in 2024." },
+    { source: "b", text: "A prime is a number with exactly two divisors, used throughout number theory and cryptography." },
+  ];
+  // Nine terms: a passage needs four. Stored item 0 shares seven; item 1 shares two.
+  const found = recall(stored, ["The year the largest known prime number was found, and how many decimal digits it has."], 2000);
+  assert.deepEqual(found.map((p) => p.from), [0]);
+  assert.deepEqual(recall([stored[1]], ["The year the largest known prime number was found, and how many decimal digits it has."], 2000), []);
+});

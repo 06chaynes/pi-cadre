@@ -511,7 +511,7 @@ test("once kept extracts pass their budget, the oldest cleared results shrink to
 /** Context for a hook that reads the session's branch. */
 const toolContext = (session: SessionManager) => ({ ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session });
 
-test("with recall, passages of cleared web results that match the task come back at the end of the request", async () => {
+test("with recall, passages of a cleared web result that match the task are restored inside that result", async () => {
   const saved = process.env.CADRE_OPTS;
   process.env.CADRE_OPTS = "clear,recall";
   try {
@@ -528,26 +528,51 @@ test("with recall, passages of cleared web results that match the task come back
       toolCall("c2", "read", { path: "config.txt" }),
       toolResult("c2", "read", config),
     ]);
-    // Both results were cleared; only the web result may be recalled, since a file can have changed since it was read.
+    // Both results were cleared. Only web results are recalled (a file can have changed since it was read).
     session.appendContextEdit(ids[2], { content: "[web_search result cleared]" });
     session.appendContextEdit(ids[4], { content: "[read result cleared]" });
-    // Only web_search and web_fetch are recalled; any other tool, local or not, is left out.
-    const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
-    // Recalled web text stays tool output (a recall call and its result), never a user turn.
-    const [call, last] = result.messages.slice(-2);
-    assert.equal(call.role, "assistant");
-    assert.equal(call.content[0].name, "recall");
-    assert.deepEqual([last.role, last.toolName, last.toolCallId], ["toolResult", "recall", call.content[0].id]);
-    assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
-    const text = JSON.stringify(last.content);
-    assert.match(text, /Passages from earlier tool results/);
-    assert.match(text, /41,024,320 digits/);
-    assert.match(text, /web_search \{\\"query\\":\\"largest known prime\\"\}/);
-    assert.doesNotMatch(text, /etc\/app/);
+    const messages = session.buildSessionContext().messages;
+    const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+    assert.equal(result.messages.length, messages.length, "nothing is added; passages go back where they came from");
+    const restored = JSON.stringify(result.messages[2].content);
+    assert.equal(result.messages[2].role, "toolResult");
+    assert.match(restored, /\[web_search result cleared\]/);
+    assert.match(restored, /Passages of this result that match the task/);
+    assert.match(restored, /41,024,320 digits/);
+    assert.doesNotMatch(JSON.stringify(result.messages[4].content), /etc\/app/);
 
     // Nothing cleared: nothing to recall.
     const { session: fresh } = realSession([{ role: "user", content: prompt }, toolCall("c1", "web_search", { query: "q" }), toolResult("c1", "web_search", prime)]);
     assert.equal(await calls.handlers["context"]({ type: "context", messages: fresh.buildSessionContext().messages }, toolContext(fresh)), undefined);
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
+
+test("with recall, passages of a result that compaction removed come back right after the summary as tool output", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "clear,recall";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Who won the 2024 Nobel Prize in Physics.";
+    const { session, ids } = realSession([
+      { role: "user", content: prompt },
+      toolCall("c1", "web_search", { query: "largest known prime" }),
+      toolResult("c1", "web_search", "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(300)),
+      toolCall("c2", "web_search", { query: "nobel physics 2024" }),
+      toolResult("c2", "web_search", "Hopfield and Hinton won the 2024 Nobel Prize in Physics."),
+    ]);
+    session.appendCompaction("Researching two facts.", ids[3], 20_000);
+    const messages = session.buildSessionContext().messages;
+    const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+    const [call, back] = result.messages.slice(1, 3);
+    assert.equal(call.role, "assistant");
+    assert.deepEqual([back.role, back.toolName], ["toolResult", "recall"]);
+    assert.match(JSON.stringify(back.content), /41,024,320 digits/);
+    assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
   } finally {
     if (saved === undefined) delete process.env.CADRE_OPTS;
     else process.env.CADRE_OPTS = saved;

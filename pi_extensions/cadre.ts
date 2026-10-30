@@ -514,11 +514,11 @@ export default async function (pi: ExtensionAPI) {
 
   // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
   // that compaction removed from context is restored in one message after the compaction summary.
-  // Passages of cleared web results that match the task come back with each request (see recallMessage).
+  // Passages of cleared web results that match the task come back with each request (see withRecall).
   pi.on("context", async (event, ctx) => {
     if (!OPTS.has("recall")) return undefined;
-    const recalled = recallMessage(event.messages, ctx);
-    return recalled ? { messages: [...event.messages, ...recalled] } : undefined;
+    const messages = withRecall(event.messages, ctx);
+    return messages ? { messages } : undefined;
   });
 
   /**
@@ -534,10 +534,11 @@ export default async function (pi: ExtensionAPI) {
   };
 
   /**
-   * A recall tool call and result with the passages of cleared or compacted web results that best match the task (one query per listed
-   * item), or undefined when there are none. Results still in context in full are not stored.
+   * `messages` with the passages of cleared web results that best match the task (one query per listed item) restored
+   * inside the result each came from, so a passage keeps its place and its standing as tool output. Passages of results
+   * that compaction removed go in one recall tool result after the compaction summary. Undefined when nothing matches.
    */
-  const recallMessage = (messages: readonly any[], ctx: ExtensionContext) => {
+  const withRecall = (messages: readonly any[], ctx: ExtensionContext) => {
     const shown = new Map<string, string>();
     for (const m of messages) if (m.role === "toolResult") shown.set(m.toolCallId, textOf(m));
     const branch = ctx.sessionManager.getBranch().flatMap((entry: any) => (entry.type === "message" ? [entry.message] : []));
@@ -546,22 +547,33 @@ export default async function (pi: ExtensionAPI) {
       if (m.role !== "assistant") continue;
       for (const block of m.content ?? []) if (block.type === "toolCall") calls.set(block.id, `${block.name} ${JSON.stringify(block.arguments ?? {})}`);
     }
-    const stored = branch.flatMap((m: any) => {
-      if (m.role !== "toolResult" || m.isError || !RECALL_TOOLS.has(m.toolName)) return [];
-      const text = textOf(m);
-      return shown.get(m.toolCallId) === text ? [] : [{ source: calls.get(m.toolCallId) ?? m.toolName, text }];
-    });
-    if (!stored.length) return undefined;
+    const cleared = branch.filter((m: any) => m.role === "toolResult" && !m.isError && RECALL_TOOLS.has(m.toolName) && shown.get(m.toolCallId) !== textOf(m));
+    if (!cleared.length) return undefined;
+    const stored = cleared.map((m: any) => ({ source: calls.get(m.toolCallId) ?? m.toolName, text: textOf(m) }));
     const task = textOf([...branch].reverse().find((m: any) => m.role === "user") ?? {});
     const step = [...messages].reverse().find((m: any) => m.role === "assistant");
     const stepText = step ? `${textOf(step)} ${(step.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => JSON.stringify(b.arguments)).join(" ")}` : "";
     const found = recall(stored, taskQueries(task, stepText), RECALL_MAX_CHARS);
     if (!found.length) return undefined;
-    const text = [
-      "[Passages from earlier tool results in this task, brought back for the current step:]",
-      ...found.map((p) => `From ${p.source}:\n${p.text}`),
-    ].join("\n\n");
-    return toolPair("recall", { reason: "cleared results matching the task" }, text);
+    const byCall = new Map<string, string[]>();
+    for (const p of found) {
+      const id = cleared[p.from].toolCallId;
+      byCall.set(id, [...(byCall.get(id) ?? []), p.text]);
+    }
+    const out = messages.map((m: any) => {
+      const passages = m.role === "toolResult" ? byCall.get(m.toolCallId) : undefined;
+      if (!passages) return m;
+      byCall.delete(m.toolCallId);
+      const text = ["[Passages of this result that match the task, restored after clearing:]", ...passages].join("\n\n");
+      return { ...m, content: [...m.content, { type: "text", text }] };
+    });
+    if (byCall.size) {
+      const lost = [...byCall].map(([id, passages]) => `From ${calls.get(id) ?? "an earlier call"}:\n${passages.join("\n\n")}`);
+      const text = ["[Passages of earlier results, removed by compaction, that match the task:]", ...lost].join("\n\n");
+      const at = out.findIndex((m: any) => m.role !== "compactionSummary" && m.role !== "branchSummary");
+      out.splice(at < 0 ? out.length : at, 0, ...toolPair("recall", { reason: "results removed by compaction" }, text));
+    }
+    return out;
   };
 
   pi.on("context_with_system", async (event) => {
