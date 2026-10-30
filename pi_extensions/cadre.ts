@@ -15,7 +15,9 @@
  *   /cadre-guard on|off        path guard (see guard.ts), on by default
  *
  * In auto mode the thinking level is set per prompt: medium for planning, architecture, diagnosis, debugging, and
- * review, off otherwise. Truncated read and bash results get the unseen lines that match the request (see unseen.ts).
+ * review, off otherwise. Truncated read and bash results get the unseen lines that match the request, and any tool
+ * result larger than RESULT_SHARE of the largest context window is shortened to its start plus matching lines (see
+ * unseen.ts).
  * Every request gets short coding rules appended to the system message.
  */
 
@@ -25,8 +27,8 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { guardReason } from "./guard.ts";
-import { routeRequest } from "./router.ts";
-import { unseenNote } from "./unseen.ts";
+import { CHARS_PER_TOKEN, routeRequest } from "./router.ts";
+import { shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
   type ServerKey,
@@ -44,6 +46,8 @@ const PROVIDER = "llama-cpp";
 const ROUTER_ID = "cadre";
 // Pi's system prompt and tools take about 1,600 tokens; below this LFM3 cannot hold a turn.
 const LFM3_MIN_CONTEXT = 8192;
+// Share of the largest context window one tool result may take; the rest holds the system prompt, history, and reply.
+const RESULT_SHARE = 0.4;
 // Private to the user; a shared temporary directory would let another user redirect the logs.
 const LOG_DIR = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pi-cadre");
 // The first start of a server may download its model from Hugging Face.
@@ -197,7 +201,14 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("tool_result", async (event, ctx) => {
     const note = unseenNote(event.toolName, event.input, (event as any).details, ctx.cwd, lastPrompt);
-    return note === undefined ? undefined : { content: [...event.content, { type: "text" as const, text: note }] };
+    let content = note === undefined ? event.content : [...event.content, { type: "text" as const, text: note }];
+    const text = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+    const largest = Math.max(...modelConfigs(contexts).map((model) => model.contextWindow));
+    const maxChars = Math.floor(largest * RESULT_SHARE * CHARS_PER_TOKEN);
+    if (text.length > maxChars) {
+      content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: shortenText(text, lastPrompt, maxChars) }];
+    }
+    return content === event.content ? undefined : { content };
   });
 
   pi.on("before_agent_start", async (event) => {
