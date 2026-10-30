@@ -390,6 +390,8 @@ export default async function (pi: ExtensionAPI) {
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
+  // The end-of-run source check runs once per prompt.
+  let sourcesChecked = false;
 
   // Compaction and branch summaries hold their text in `summary`, other messages in `content`.
   const textOf = (message: any) =>
@@ -554,10 +556,57 @@ export default async function (pi: ExtensionAPI) {
       continued = true;
       return { continue: true };
     }
-    if (!OPTS.has("clear") || unanswered) return undefined;
+    if (unanswered) return undefined;
+    if (!sourcesChecked) {
+      sourcesChecked = true;
+      const note = failedSources(ctx);
+      if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: note, display: true }] };
+    }
+    if (!OPTS.has("clear")) return undefined;
     const edits = await clearResults(event.context.contextEntries, 0, new Set(), "after the answer");
     return edits.length ? { entries: edits } : undefined;
   });
+
+  /**
+   * A note for the model when its answer, or a file it wrote in this run, cites a URL that appears only in failed tool
+   * calls and in no result that succeeded: a source it never read. Undefined when every cited URL was read.
+   */
+  const failedSources = (ctx: ExtensionContext) => {
+    const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
+    const start = branch.findLastIndex((m) => m.role === "user");
+    const run = branch.slice(start + 1);
+    const results = new Map<string, any>();
+    for (const m of branch) if (m.role === "toolResult") results.set(m.toolCallId, m);
+    const bare = (url: string) => url.replace(/[).,;:'"*`>\]|]+$/, "").replace(/\/$/, "");
+    const urls = (text: string) => (text.match(/https?:\/\/[^\s"'<>`|)\]]+/g) ?? []).map(bare);
+    const failed = new Map<string, string>();
+    const read = new Set<string>();
+    for (const m of branch) {
+      if (m.role === "toolResult" && !m.isError) for (const url of urls(textOf(m))) read.add(url);
+      if (m.role === "user") for (const url of urls(textOf(m))) read.add(url);
+      if (m.role !== "assistant") continue;
+      for (const call of (m.content ?? []).filter((b: any) => b.type === "toolCall")) {
+        const result = results.get(call.id);
+        if (!result?.isError) continue;
+        const error = textOf(result).split("\n")[0].slice(0, 80);
+        for (const url of urls(JSON.stringify(call.arguments ?? {}))) failed.set(url, error);
+      }
+    }
+    // Where each cited URL appears: a file written in this run, or the final answer.
+    const cited: [string, string][] = [];
+    for (const m of run) {
+      if (m.role !== "assistant") continue;
+      for (const call of (m.content ?? []).filter((b: any) => b.type === "toolCall" && (b.name === "write" || b.name === "edit"))) {
+        for (const url of urls(JSON.stringify(call.arguments ?? {}).replace(/\\n/g, " "))) cited.push([String(call.arguments?.path ?? call.name), url]);
+      }
+    }
+    const final = [...run].reverse().find((m) => m.role === "assistant" && textOf(m).trim());
+    for (const url of urls(final ? textOf(final) : "")) cited.push(["your answer", url]);
+    const unread = cited.filter(([, url], i) => failed.has(url) && !read.has(url) && cited.findIndex(([, u]) => u === url) === i);
+    if (!unread.length) return undefined;
+    const lines = unread.map(([where, url]) => `${where.split(/[\\/]/).pop()} cites ${url}, which failed to load (${failed.get(url)}) and appears in no tool result that succeeded.`);
+    return `Source check: ${lines.join(" ")} Replace it with a source you retrieved, or say the item was not found.`;
+  };
 
   let savedTools: string[] | undefined;
   pi.on("agent_settled", async () => {
@@ -567,6 +616,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     continued = false;
+    sourcesChecked = false;
     // Runs started by an extension's custom message have no prompt and keep the last one.
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;

@@ -209,7 +209,7 @@ function conversation(chars: number) {
 /** Context whose session projection holds `messages`, with a cadre model selected unless `provider` says otherwise. */
 function sessionContext(messages: any[], provider = "llama-cpp") {
   const { ctx } = uiContext(true, { provider, id: "cadre" });
-  return { ...ctx, sessionManager: { buildSessionProjection: () => ({ messages, entries: [] }) } };
+  return { ...ctx, sessionManager: { buildSessionProjection: () => ({ messages, entries: [] }), getBranch: () => messages.map((message) => ({ type: "message", message })) } };
 }
 
 test("threshold compaction is cancelled while the model-visible conversation still fits Spark", async () => {
@@ -732,4 +732,32 @@ test("a second digest in the same request carries the condensed steps forward an
     for (let i = 0; i <= 5; i++) assert.match(second, new RegExp(`${i + 1}\\. web_search \\{"query":"query ${i}"\\}`));
     assert.doesNotMatch(second, /query 6/);
   });
+});
+
+test("a URL cited only from a failed call gets one corrective step at the end of the run", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const bad = "https://www.toukei.metro.tokyo.lg.jp/tnenkan/2024/tn24q3e002.htm";
+  const build = (fetchOk: boolean) =>
+    realSession([
+      { role: "user", content: "Research Tokyo's population and write research.md." },
+      toolCall("f1", "web_fetch", { url: bad }),
+      { ...toolResult("f1", "web_fetch", fetchOk ? `Population 14,192,184. Source ${bad}` : 'Fetch API error (status 404): {"error": "not found"}'), isError: !fetchOk },
+      toolCall("w1", "write", { path: "research.md", content: `| Tokyo | the metropolis | ${bad} |` }),
+      toolResult("w1", "write", "Successfully wrote to research.md"),
+      answer("Done. research.md is written."),
+    ]);
+  const settle = (session: SessionManager) => calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Research Tokyo's population and write research.md." }, uiContext(true).ctx);
+  const { session } = build(false);
+  const result = await settle(session);
+  assert.equal(result.continue, true);
+  const [note] = result.entries;
+  assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
+  assert.match(note.content, new RegExp(`research\\.md cites ${bad.replace(/[.?]/g, "\\$&")}, which failed to load \\(Fetch API error \\(status 404\\)`));
+  assert.match(note.content, /Replace it with a source you retrieved, or say the item was not found\./);
+  assert.equal((await settle(session))?.continue, undefined, "only once per run");
+  const ok = await settle(build(true).session);
+  assert.equal(ok?.continue, undefined, "a URL that also loaded is fine");
 });
