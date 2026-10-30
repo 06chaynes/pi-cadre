@@ -32,6 +32,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { guardReason } from "./guard.ts";
 import { isResearchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
+import { projectMap } from "./projectmap.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { shortenSearch, shortenText, unseenNote } from "./unseen.ts";
@@ -63,6 +64,9 @@ const SYSTEM_ALLOWANCE = 4096;
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
 const EXTRACT_BUDGET_CHARS = 12000;
+// Most characters of the project file map in the system message (see projectmap.ts).
+const MAP_MAX_CHARS = 2000;
+
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
@@ -388,8 +392,11 @@ export default async function (pi: ExtensionAPI) {
   //   tools     a research question gets only RESEARCH_TOOLS for its run
   //   recall    passages of cleared web results that match the task come back with each request
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
+  //   map       the system message lists the project's files (see projectmap.ts)
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
+  // The project file map for the current prompt (built at its start), or "" when off.
+  let map = "";
   // The end-of-run source check runs once per prompt.
   let sourcesChecked = false;
 
@@ -620,6 +627,7 @@ export default async function (pi: ExtensionAPI) {
     // Runs started by an extension's custom message have no prompt and keep the last one.
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;
+    map = OPTS.has("map") ? projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS) : "";
     const research = ctx.model?.provider === PROVIDER && isResearchQuestion(event.prompt);
     if (research && OPTS.has("tools")) {
       savedTools = pi.getActiveTools();
@@ -729,7 +737,7 @@ export default async function (pi: ExtensionAPI) {
     const system = event.messages?.[0];
     if (system?.role === "system" && typeof system.content === "string") {
       const rules = OPTS.has("rules") ? AGENT_RULES : CODING_RULES;
-      system.content += "\n" + rules;
+      system.content += "\n" + rules + (map ? "\n\n" + map : "");
     }
   });
 }

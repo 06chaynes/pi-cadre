@@ -761,3 +761,21 @@ test("a URL cited only from a failed call gets one corrective step at the end of
   const ok = await settle(build(true).session);
   assert.equal(ok?.continue, undefined, "a URL that also loaded is fine");
 });
+
+test("with map, the system message lists the project's files", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "map";
+  try {
+    serveProps({});
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "What does pi_extensions/router.ts do?" }, uiContext(true).ctx);
+    const system = { role: "system", content: "Pi system prompt" };
+    await calls.handlers["context_with_system"]({ messages: [system] });
+    assert.match(system.content, /Project files \(paths relative to the working directory\):/);
+    assert.match(system.content, /pi_extensions\/router\.ts/);
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
