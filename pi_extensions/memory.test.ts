@@ -49,3 +49,20 @@ test("recall leaves out passages that match fewer than two query terms", () => {
   const stored = [{ source: "web_search", text: "Whales are marine mammals found in every ocean." }];
   assert.deepEqual(recall(stored, ["How long a sperm whale typically holds its breath."], 1000), []);
 });
+
+test("passages join a short run such as a heading to the text after it", () => {
+  const page = "# How long can whales hold their breath?\n\nA sperm whale can spend around 90 minutes hunting underwater.\n\nOther text about oceans and tides that is long enough to stand on its own as a passage here.";
+  const parts = passages({ source: "s", text: page }, 500);
+  assert.match(parts[0].text, /^# How long can whales hold their breath\?\nA sperm whale can spend around 90 minutes/);
+});
+
+test("lines the extension added to a result are not stored", () => {
+  const text = [
+    "The largest known prime has 41,024,320 digits.",
+    "[Result shortened from 90000 to fit the context window. Lines 1-40 are above; below are the other lines that contain words from the request (prime, whale, everest, tokyo).]",
+    "[Lines outside the part shown above that contain words from the request (prime, whale):]",
+    "[This result can leave context after your next step. Record with the note tool any fact from it you will need later.]",
+  ].join("\n");
+  const stored = passages({ source: "s", text }, 1000).map((p) => p.text).join("\n");
+  assert.equal(stored, "The largest known prime has 41,024,320 digits.");
+});

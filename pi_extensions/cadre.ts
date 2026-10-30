@@ -64,10 +64,10 @@ const SYSTEM_ALLOWANCE = 4096;
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
 const NOTE_BUDGET_CHARS = 12000;
-// Recall (see memory.ts): most characters of cleared passages brought back per request. Local tools are left out: a
-// file or command output can have changed since, and running the tool again is exact.
+// Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
+// tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
-const LOCAL_TOOLS = new Set(["read", "bash", "grep", "find", "ls", "edit", "write"]);
+const RECALL_TOOLS = new Set(["web_search", "web_fetch"]);
 
 // Size of the digest of earlier requests, and how much of an older answer it keeps once that size is reached.
 const DIGEST_MAX_CHARS = 7000;
@@ -587,7 +587,7 @@ export default async function (pi: ExtensionAPI) {
     if (OPTS.has("recall")) {
       const recalled = recallMessage(messages, ctx);
       if (recalled) {
-        messages.push(recalled);
+        messages.push(...recalled);
         changed = true;
       }
     }
@@ -611,14 +611,26 @@ export default async function (pi: ExtensionAPI) {
     if (lost.length) {
       const text = ["Your notes from earlier in this task (restored after compaction):", ...lost.map((n) => `- ${n.topic}: ${n.fact} (source: ${n.source})`)].join("\n");
       const at = messages.findIndex((m: any) => m.role !== "compactionSummary" && m.role !== "branchSummary");
-      messages.splice(at < 0 ? messages.length : at, 0, { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as any);
+      messages.splice(at < 0 ? messages.length : at, 0, ...toolPair(NOTE_TOOL.name, { restore: lost.length }, text));
       changed = true;
     }
     return changed ? { messages } : undefined;
   });
 
   /**
-   * A message with the passages of cleared or compacted web results that best match the task (one query per listed
+   * An assistant tool call and its result carrying `text`, for context added by the extension: text that came from tool
+   * output stays tool output, never a user turn.
+   */
+  const toolPair = (name: string, args: Record<string, unknown>, text: string) => {
+    const id = `cadre-${name}-${Date.now()}`;
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    const call = { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], api: "openai-completions", provider: PROVIDER, model: ROUTER_ID, usage, stopReason: "toolUse", timestamp: Date.now() };
+    const result = { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: Date.now() };
+    return [call, result] as any[];
+  };
+
+  /**
+   * A recall tool call and result with the passages of cleared or compacted web results that best match the task (one query per listed
    * item), or undefined when there are none. Results still in context in full are not stored.
    */
   const recallMessage = (messages: readonly any[], ctx: ExtensionContext) => {
@@ -631,7 +643,7 @@ export default async function (pi: ExtensionAPI) {
       for (const block of m.content ?? []) if (block.type === "toolCall") calls.set(block.id, `${block.name} ${JSON.stringify(block.arguments ?? {})}`);
     }
     const stored = branch.flatMap((m: any) => {
-      if (m.role !== "toolResult" || m.isError || m.toolName === NOTE_TOOL.name || LOCAL_TOOLS.has(m.toolName)) return [];
+      if (m.role !== "toolResult" || m.isError || !RECALL_TOOLS.has(m.toolName)) return [];
       const text = textOf(m);
       return shown.get(m.toolCallId) === text ? [] : [{ source: calls.get(m.toolCallId) ?? m.toolName, text }];
     });
@@ -645,7 +657,7 @@ export default async function (pi: ExtensionAPI) {
       "[Passages from earlier tool results in this task, brought back for the current step:]",
       ...found.map((p) => `From ${p.source}:\n${p.text}`),
     ].join("\n\n");
-    return { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as any;
+    return toolPair("recall", { reason: "cleared results matching the task" }, text);
   };
 
   pi.on("context_with_system", async (event) => {

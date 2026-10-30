@@ -20,6 +20,10 @@ export interface Passage {
 // BM25 parameters (the usual defaults).
 const K1 = 1.2;
 const B = 0.75;
+// A run of text shorter than this (a heading, a label) joins the run after it.
+const MIN_PASSAGE_CHARS = 120;
+// Lines the extension adds to tool results (unseen.ts, cadre.ts); they are not the tool's output.
+const ANNOTATION = /^\[(Result shortened from |Lines outside the part shown above |This result can leave context )/;
 // A list item in a task: "1. ...", "2) ...", "- ...", "* ...".
 const ITEM = /^\s*(?:\d+[.)]|[-*•])\s+(.+)$/;
 
@@ -30,26 +34,31 @@ function terms(text: string): string[] {
     .map((word) => (word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word));
 }
 
-/** Passages of at most `maxChars`: runs of non-blank lines, split further when a run is longer than the limit. */
+/**
+ * Passages of at most `maxChars`: runs of non-blank lines, a short run joined to the next, split further when a run is
+ * longer than the limit. Lines the extension added are left out.
+ */
 export function passages(stored: Stored, maxChars: number): Passage[] {
   const out: Passage[] = [];
   let current = "";
-  const flush = () => {
+  const flush = (force = false) => {
+    if (!force && current.length < MIN_PASSAGE_CHARS) return;
     if (current.trim()) out.push({ source: stored.source, text: current.trim() });
     current = "";
   };
   for (const raw of stored.text.split("\n")) {
+    if (ANNOTATION.test(raw)) continue;
     if (!raw.trim()) {
       flush();
       continue;
     }
     for (let line = raw; line.length; line = line.slice(maxChars)) {
       const piece = line.slice(0, maxChars);
-      if (current.length + piece.length + 1 > maxChars) flush();
+      if (current.length + piece.length + 1 > maxChars) flush(true);
       current += (current ? "\n" : "") + piece;
     }
   }
-  flush();
+  flush(true);
   return out;
 }
 

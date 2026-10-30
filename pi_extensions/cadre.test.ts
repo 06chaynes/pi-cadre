@@ -590,14 +590,16 @@ test("notes that compaction removed come back before the next request, latest pe
   session.appendCompaction("Turn context (split turn): researching twelve facts.", ids[7], 20_000);
   const messages = session.buildSessionContext().messages;
   const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
-  const restored = result.messages.find((m: any) => m.role === "user" && JSON.stringify(m.content).includes("Your notes"));
-  assert.ok(restored, "notes message added");
+  const restored = result.messages.find((m: any) => m.role === "toolResult" && JSON.stringify(m.content).includes("Your notes"));
+  assert.ok(restored, "notes restored as tool output");
+  assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("Your notes")));
   const text = JSON.stringify(restored.content);
   assert.match(text, /Largest prime: 2\^136,279,841 - 1, found 2024, 41,024,320 digits/);
   assert.match(text, /Whale dive: around 90 minutes hunting underwater/);
   assert.doesNotMatch(text, /up to 45 minutes/);
   assert.doesNotMatch(text, /Tokyo population/, "a note still in context is not repeated");
-  assert.equal(result.messages.indexOf(restored), 1, "right after the compaction summary");
+  assert.equal(result.messages.indexOf(restored), 2, "right after the compaction summary and its call");
+  assert.equal(result.messages[1].content[0].name, "note");
 
   const { session: plain } = realSession([{ role: "user", content: "q" }, note("n1", "t", "f"), toolResult("n1", "note", "Noted.")]);
   assert.equal(await calls.handlers["context"]({ type: "context", messages: plain.buildSessionContext().messages }, toolContext(plain)), undefined);
@@ -652,9 +654,14 @@ test("with recall, passages of cleared web results that match the task come back
     // Both results were cleared; only the web result may be recalled, since a file can have changed since it was read.
     session.appendContextEdit(ids[2], { content: "[web_search result cleared]" });
     session.appendContextEdit(ids[4], { content: "[read result cleared]" });
+    // Only web_search and web_fetch are recalled; any other tool, local or not, is left out.
     const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
-    const last = result.messages.at(-1);
-    assert.equal(last.role, "user");
+    // Recalled web text stays tool output (a recall call and its result), never a user turn.
+    const [call, last] = result.messages.slice(-2);
+    assert.equal(call.role, "assistant");
+    assert.equal(call.content[0].name, "recall");
+    assert.deepEqual([last.role, last.toolName, last.toolCallId], ["toolResult", "recall", call.content[0].id]);
+    assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
     const text = JSON.stringify(last.content);
     assert.match(text, /Passages from earlier tool results/);
     assert.match(text, /41,024,320 digits/);
