@@ -9,7 +9,7 @@ Pi coding agent + local llama.cpp models (Spark-X2.6-4B on port 8080, LFM3-1.7B 
 - `launchers/start_llama_server.{sh,bat}`: `MODEL=dual|spark|lfm3|<HF id>|<.gguf>`. Each model always uses its own port: Spark 8080, LFM3 8081. Dual mode re-invokes the script once per model.
 - `launchers/pi_cadre.{sh,bat}`: starts Pi on the configured model.
 - `package.json`: makes the repo a Pi package. `files` limits the npm package to the extension. Releases: bump `version`, update `CHANGELOG.md`, push a `vX.Y.Z` tag; `.github/workflows/release.yml` stages the release on npm via trusted publishing, and a maintainer approves it with 2FA.
-- `pi_extensions/`: the Pi extension. `cadre.ts` wires it into Pi (provider and `cadre` router registration, startup prompts, `/cadre-*` commands, thinking, coding rules). `servers.ts` holds model and port facts, probes, and llama-server arguments matching the launchers. `router.ts` picks Spark or LFM3 per prompt. `guard.ts` is the path guard on `tool_call`. `unseen.ts` appends matching unseen lines to truncated read and bash results, and shortens oversized tool results, on `tool_result`. Pi API docs are in the installed package's `docs/extensions.md`, `docs/custom-provider.md`, and `docs/virtual-models.md`.
+- `pi_extensions/`: the Pi extension. `cadre.ts` wires it into Pi: provider and `cadre` router registration, startup prompts, `/cadre-*` commands, thinking, and the context hooks (`tool_call` guard and web_search cap; `tool_result` shortening, syntax check, and original saving; `turn_end` and `agent_before_settle` clearing, continuation, and source check; `session_before_compact` digest; `context` reasoning removal and recall; `context_with_system` rules, date, and project map; `before_provider_request` reply limit and thinking budget). `servers.ts` holds model and port facts, probes, and llama-server arguments matching the launchers. `router.ts` picks Spark or LFM3 per request. `guard.ts` is the path guard. `tokens.ts` counts tokens on the servers' tokenizers. `text.ts` holds search terms and BM25. `unseen.ts` appends unseen matching lines to truncated results and shortens oversized ones. `memory.ts` recalls passages of cleared results; `originals.ts` keeps the full text of shortened web results on disk. `projectmap.ts` lists project files. `syntax.ts` parses edited files. Context, memory, and recovery are done in code from the session, never by asking the model; test model behavior with exact replays (see CHANGELOG). Pi API docs are in the installed package's `docs/extensions.md`, `docs/custom-provider.md`, and `docs/virtual-models.md`.
 - `llama_cpp_client.py`: `MODELS` (ids, URLs), `AutoThinkingPolicy`, `AutoModelPolicy`, `LlamaCppClient`. `generate_code` holds the only copy of the Spark-chat vs LFM3-prefill logic.
 - `repo_indexer.py`: AST symbol scan and function slicing.
 - `benchmark_tasks.py`: task data and the inject/verify/reset helpers for the `requests_repo/` clone (psf/requests v2.31.0, gitignored).
@@ -19,7 +19,7 @@ Pi coding agent + local llama.cpp models (Spark-X2.6-4B on port 8080, LFM3-1.7B 
 
 ```bash
 python3 -m pytest                      # unit tests, no server needed
-node --test 'pi_extensions/*.test.ts'  # extension tests, Node 22.6+
+npm ci --ignore-scripts && npm run typecheck && npm test  # extension type check (against Pi's types) and tests, Node 22.6+
 python3 run_full_battery_eval.py       # needs llama-server and requests_repo/ (see README)
 ./launchers/start_llama_server.sh -h
 ```

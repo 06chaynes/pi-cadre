@@ -76,7 +76,51 @@ On machines with more than one GPU, llama.cpp splits layers across all of them. 
 
 With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
 
-When a read or bash result is cut off, the extension appends the lines outside the shown part that contain words from your request, with line numbers, so the model gets them even if it does not page through the rest. Any tool result too large for the context window (more than 40% of the largest slot), such as a long web search, is shortened to its start plus the lines that contain words from your request.
+### Local web search (optional)
+
+Pi's web tools come from separate packages. To search without an API key or quota, run a local
+[SearXNG](https://github.com/searxng/searxng) and point [`pi-web-access`](https://www.npmjs.com/package/pi-web-access)
+at it:
+
+```bash
+./launchers/searxng.sh setup      # Windows: launchers\searxng.bat setup; needs Docker
+./launchers/searxng.sh status
+./launchers/searxng.sh teardown   # add --purge to delete the config too
+```
+
+`setup` starts a pinned SearXNG image bound to `127.0.0.1` only and prints the `web-search.json` that keeps every
+search on it. SearXNG sends queries to public engines from your IP address; some (Brave, DuckDuckGo) rate-limit
+frequent automated queries, so the config enables several others. The extension's handling of web results does not
+depend on which search package you use.
+
+### How the extension keeps long tasks working
+
+Small local models have small context windows (Spark gets 32k tokens per slot). The extension manages context in
+code, so none of this depends on the model remembering to do it:
+
+- **Real sizes.** Each server's per-slot window is read from llama-server, and each request's reply limit is set from
+  the request's actual token count.
+- **Tool results fit.** A result larger than its share of the window is shortened. Search results keep every hit's
+  title and URL plus the passages that best match the search and your request; other results keep their opening and
+  the matching lines, with a note on how to see the rest. Parallel calls share the room. A web search asking for more
+  than 5 results is capped at 5.
+- **Old results leave; useful passages come back.** During a task, results the model has already read are replaced
+  by a short extract once they pass a budget. Passages of cleared web results that match the task are restored inside
+  the result they came from (one query per listed item, ranked with BM25). The full text of shortened web results is
+  kept in `~/.local/state/pi-cadre/results/` for a week so these passages can come from the cut part too.
+- **Compaction without a model.** When compaction is still needed, earlier questions and the current request's earlier
+  steps are condensed by code: the request verbatim, then each step's call and outcome.
+- **Project files and the date.** The system message lists the project's files (from git, bounded in size) and
+  today's date, which Pi's own prompt does not include.
+- **Broken edits are reported.** After an edit or write, the file is parsed (Python, JavaScript, TypeScript, Rust, or
+  Go, when the parser is installed) and a syntax error is reported in the same tool result.
+- **Thinking.** THINKING_DEFAULT Every request with thinking on gets a thinking budget well below its reply limit, so
+  reasoning cannot use up a reply.
+- **Recovery.** A reply cut off before any answer or tool call continues once. If the answer, or a file written in the
+  run, cites a URL that appeared only in failed calls, the model gets one step to replace it. Path-guard blocks say
+  what to do instead and list matching project files.
+- **Routing.** LFM3 answers questions about local code; edits start on LFM3 and finish on Spark; everything else runs
+  on Spark.
 
 Pi commands added by the extension:
 
@@ -131,7 +175,7 @@ Each task description in B and C states the fix. C passes when that exact text a
 | `setup_wizard.py`, `install.sh`, `install.bat` | Installer |
 | `cadre_config.env` | Server settings read by the launchers |
 | `launchers/` | Server and Pi launchers |
-| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts` |
+| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts`, and the context modules (`tokens.ts`, `text.ts`, `unseen.ts`, `memory.ts`, `originals.ts`, `projectmap.ts`, `syntax.ts`) |
 | `llama_cpp_client.py` | llama-server client and routing policies |
 | `repo_indexer.py` | AST symbol scan and function slicing |
 | `benchmark_tasks.py` | Benchmark task data |
