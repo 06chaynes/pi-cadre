@@ -5,7 +5,7 @@ Pi coding agent + local llama.cpp models (Spark-X2.6-4B on port 8080, LFM3-1.7B 
 ## Map
 
 - `setup_wizard.py`: installer. Writes `lfm3_config.env` (value lines only, keeps comments) and merges into `~/.pi/agent/{models,settings}.json`.
-- `lfm3_config.env`: single source of server settings. Read by every launcher in `launchers/`.
+- `lfm3_config.env`: single source of server settings. Read by every launcher in `launchers/`. `SPARK_MODEL` and `LFM3_MODEL` hold machine-specific model paths. Don't commit local values.
 - `launchers/start_llama_server.{sh,bat}`: `MODEL=dual|spark|lfm3|<HF id>|<.gguf>`. Each model always uses its own port: Spark 8080, LFM3 8081. Dual mode re-invokes the script once per model.
 - `launchers/pi_lfm3.{sh,bat}`: starts Pi on the configured model and sets `LLAMA_BASE_URL` for the extension.
 - `pi_extensions/lfm3_agent_extension.ts`: `/lfm3-status`, `/lfm3-thinking`, per-prompt thinking level, coding rules appended to the system message. Pi API docs are in the installed package's `docs/extensions.md`.

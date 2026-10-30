@@ -39,14 +39,13 @@ case ${MODEL:-dual} in
         wait
         exit
         ;;
-    spark)
-        SPARK_GGUF="$PROJECT_DIR/models/Spark-X2.6-4B-Q4_K_M.gguf"
-        if [ -f "$SPARK_GGUF" ]; then SOURCE=(-m "$SPARK_GGUF"); else SOURCE=(-hf XHToken/Spark-X2.6-4B-GGUF:Q4_K_M); fi
-        DEFAULTS=(8080 65536 8)
-        ;;
-    lfm3) SOURCE=(-hf LiquidAI/LFM3-1.7B-GGUF:Q4_K_M); DEFAULTS=(8081 32768 16) ;;
-    *.gguf) SOURCE=(-m "$MODEL"); DEFAULTS=(8080 32768 8) ;;
-    *) SOURCE=(-hf "$MODEL"); DEFAULTS=(8080 32768 8) ;;
+    spark) ID=${SPARK_MODEL:-XHToken/Spark-X2.6-4B-GGUF:Q4_K_M}; DEFAULTS=(8080 65536 8) ;;
+    lfm3) ID=${LFM3_MODEL:-LiquidAI/LFM3-1.7B-GGUF:Q4_K_M}; DEFAULTS=(8081 32768 16) ;;
+    *) ID=$MODEL; DEFAULTS=(8080 32768 8) ;;
+esac
+case $ID in
+    *.gguf) SOURCE=(-m "$ID") ;;
+    *) SOURCE=(-hf "$ID") ;;
 esac
 
 exec llama-server "${SOURCE[@]}" \

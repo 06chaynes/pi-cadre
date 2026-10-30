@@ -57,7 +57,9 @@ Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 | `lfm3` | LFM3 on 8081 | LFM3 |
 | HF repo ID or `.gguf` path | that model on `PORT` (default 8080) | Spark entry on 8080 |
 
-Command-line flags override the config; run `start_llama_server.sh --help` to list them. If `models/Spark-X2.6-4B-Q4_K_M.gguf` exists, it is used instead of downloading Spark from Hugging Face.
+Command-line flags override the config; run `start_llama_server.sh --help` to list them. By default `spark` and `lfm3` download the Q4_K_M quants from Hugging Face. To use local files or other quants, set `SPARK_MODEL` and `LFM3_MODEL` to a `.gguf` path or Hugging Face ID.
+
+On machines with more than one GPU, llama.cpp splits layers across all of them. Add `-- --device <name>` to pin a server to one device; `llama-server --list-devices` lists the names.
 
 With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
 

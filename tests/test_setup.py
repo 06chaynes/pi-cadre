@@ -25,7 +25,7 @@ def wizard(tmp_path, monkeypatch):
 def test_profile_writes_config_and_keeps_comments(wizard, tmp_path):
     assert wizard.choose_profile()[0] == "lfm3"
     config = (tmp_path / "lfm3_config.env").read_text()
-    assert "MODEL=lfm3\nCTX_SIZE=65536\nPARALLEL_SLOTS=8\n" in config
+    assert {"MODEL=lfm3", "CTX_SIZE=65536", "PARALLEL_SLOTS=8"} <= set(config.splitlines())
     assert config.startswith("# Read by launchers")
 
 
@@ -51,8 +51,13 @@ WINDOWS = sys.platform == "win32"
 posix_only = pytest.mark.skipif(WINDOWS, reason="bash-only behavior")
 
 
-def run_launcher(tmp_path, name, *args):
-    """Runs launchers/<name>.sh (.bat on Windows) with stub llama-server and pi binaries that echo their arguments."""
+def run_launcher(tmp_path, name, *args, config="MODEL=dual\n"):
+    """
+    Runs a copy of launchers/<name>.sh (.bat on Windows) next to the given lfm3_config.env contents,
+    with stub llama-server and pi binaries that echo their arguments.
+    """
+    shutil.copytree(ROOT / "launchers", tmp_path / "launchers")
+    (tmp_path / "lfm3_config.env").write_text(config)
     for tool, url in (("llama-server", ""), ("pi", "%LLAMA_BASE_URL%" if WINDOWS else "$LLAMA_BASE_URL")):
         if WINDOWS:
             (tmp_path / f"{tool}.bat").write_text(f"@echo {tool} %* {url}\n")
@@ -60,10 +65,10 @@ def run_launcher(tmp_path, name, *args):
             stub = tmp_path / tool
             stub.write_text(f'#!/bin/sh\necho "{tool} $* {url}"\n')
             stub.chmod(0o755)
-    script = ROOT / "launchers" / f"{name}.{'bat' if WINDOWS else 'sh'}"
+    script = tmp_path / "launchers" / f"{name}.{'bat' if WINDOWS else 'sh'}"
     env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"}
     res = subprocess.run([str(script), *args], capture_output=True, text=True, env=env, timeout=10)
-    return res.returncode, res.stdout.split()
+    return res.returncode, res.stdout.replace('"', "").split()
 
 
 def test_server_launcher_single(tmp_path):
@@ -71,6 +76,12 @@ def test_server_launcher_single(tmp_path):
     assert rc == 0
     assert out == ["llama-server", "-hf", setup_wizard.LFM3_ID, "--host", "127.0.0.1", "--port", "8081",
                    "--ctx-size", "4096", "--parallel", "16", "-ngl", "99", "--jinja"]
+
+
+def test_server_launcher_local_model_file(tmp_path):
+    _, out = run_launcher(tmp_path, "start_llama_server", "-m", "spark", config="SPARK_MODEL=C:/models/spark.gguf\n")
+    assert out[:5] == ["llama-server", "-m", "C:/models/spark.gguf", "--host", "127.0.0.1"]
+    assert out[5:11] == ["--port", "8080", "--ctx-size", "65536", "--parallel", "8"]
 
 
 def test_server_launcher_rejects_unknown_flag(tmp_path):

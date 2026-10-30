@@ -30,17 +30,19 @@ if /i "%MODEL%"=="dual" (
 )
 
 set "DEFAULTS=8080 32768 8"
-set SOURCE=-hf "%MODEL%"
-if /i "%MODEL:~-5%"==".gguf" set SOURCE=-m "%MODEL%"
+set "ID=%MODEL%"
 if /i "%MODEL%"=="lfm3" (
     set "DEFAULTS=8081 32768 16"
-    set SOURCE=-hf LiquidAI/LFM3-1.7B-GGUF:Q4_K_M
+    set "ID=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M"
+    if defined LFM3_MODEL set "ID=%LFM3_MODEL%"
 )
 if /i "%MODEL%"=="spark" (
     set "DEFAULTS=8080 65536 8"
-    set SOURCE=-hf XHToken/Spark-X2.6-4B-GGUF:Q4_K_M
-    if exist "%PROJECT_DIR%\models\Spark-X2.6-4B-Q4_K_M.gguf" set SOURCE=-m "%PROJECT_DIR%\models\Spark-X2.6-4B-Q4_K_M.gguf"
+    set "ID=XHToken/Spark-X2.6-4B-GGUF:Q4_K_M"
+    if defined SPARK_MODEL set "ID=%SPARK_MODEL%"
 )
+set SOURCE=-hf "%ID%"
+if /i "%ID:~-5%"==".gguf" set SOURCE=-m "%ID%"
 for /f "tokens=1-3" %%a in ("%DEFAULTS%") do (
     if not defined PORT set PORT=%%a
     if not defined CTX_SIZE set CTX_SIZE=%%b
