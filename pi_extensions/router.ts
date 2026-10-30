@@ -24,13 +24,6 @@ const LOCAL_REFERENCE = new RegExp(
 
 export type ModelChoice = "spark" | "lfm3";
 
-/** True for a question that names no local code or file and asks for no change: it can only be answered by research. */
-export function isResearchQuestion(prompt: string): boolean {
-  const text = prompt.trim();
-  const question = QUESTION_START.test(text) || text.endsWith("?");
-  return question && !CHANGE.test(text) && !LOCAL_REFERENCE.test(text) && !SMALL_EDIT.test(text);
-}
-
 /** Picks the model for a user prompt. */
 export function chooseModel(prompt: string): ModelChoice {
   const text = prompt.trim();

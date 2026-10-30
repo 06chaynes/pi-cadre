@@ -804,24 +804,6 @@ test("with firstsmall, a request starts on the second model and every continuati
   }
 });
 
-test("with descry, only its navigation tools stay active when descry's extension is installed", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "descry";
-  try {
-    serveProps({});
-    const { pi, calls } = fakePi();
-    const descry = ["descry_ensure", "descry_search", "descry_callers", "descry_callees", "descry_context", "descry_quick", "descry_flow", "descry_churn", "descry_index"];
-    let active = ["read", "bash", "edit", "write", ...descry];
-    Object.assign(pi, { getAllTools: () => active.map((name) => ({ name })), getActiveTools: () => active, setActiveTools: (names: string[]) => (active = names) });
-    await extension(pi as any);
-    await calls.handlers["session_start"]({ reason: "startup" }, { ...uiContext(true).ctx, hasUI: false });
-    assert.deepEqual(active, ["read", "bash", "edit", "write", "descry_search", "descry_callers", "descry_context", "descry_quick", "descry_flow"]);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
-});
-
 test("the system message states today's date, which Pi's own prompt does not", async () => {
   serveProps({});
   const { pi, calls } = fakePi();

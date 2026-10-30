@@ -30,7 +30,7 @@ import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { guardReason } from "./guard.ts";
-import { isResearchQuestion, routeRequest } from "./router.ts";
+import { routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
 import { namedSymbols } from "./symbols.ts";
@@ -66,9 +66,6 @@ const SYSTEM_ALLOWANCE = 4096;
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
 const EXTRACT_BUDGET_CHARS = 12000;
-// descry tools kept active with the "descry" option: find a symbol, its context, its callers, and call flow.
-const DESCRY_TOOLS = new Set(["descry_search", "descry_quick", "descry_context", "descry_callers", "descry_flow"]);
-
 // Most characters of the project file map in the system message (see projectmap.ts).
 const MAP_MAX_CHARS = 2000;
 // Most characters of the definitions of names in the request (see symbols.ts), added with the map.
@@ -169,18 +166,6 @@ function renderDigest(pairs: [string, string][]): string[] {
   return render(from);
 }
 
-// EXPERIMENT ONLY (removed before release): the "rules" option replaces CODING_RULES with these.
-const AGENT_RULES = [
-  "",
-  "### Working rules",
-  "- Questions about the world (facts, dates, numbers, events, documents): use web_search before answering, even if you think you know. Write queries that describe what you need without assuming the answer. When asked for a document's exact text, fetch the primary source with web_fetch and quote it.",
-  "- Answer from what the sources say. If sources disagree, prefer the most recent authoritative one and say so. If they do not settle the question, say that instead of guessing.",
-  "- Questions about this project: read the relevant files before answering.",
-  "- Code changes: read the code first, make the smallest change that solves the task, run the tests, and report the result.",
-  "- Keep answers short and direct. Put code in fenced blocks with a language tag.",
-].join("\n");
-const RESEARCH_TOOLS = ["web_search", "web_fetch", "read"];
-
 export default async function (pi: ExtensionAPI) {
   let contexts: Contexts = await probeContexts();
   let thinkingMode: ThinkingMode = "auto";
@@ -257,11 +242,6 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     pruneOriginals(resultsDir(), Date.now());
-    // EXPERIMENT: "descry" keeps only descry's navigation tools when its extension is installed (fewer tool
-    // definitions for small models to read and choose among).
-    if (OPTS.has("descry") && pi.getAllTools().some((tool) => tool.name.startsWith("descry_"))) {
-      pi.setActiveTools(pi.getActiveTools().filter((name) => !name.startsWith("descry_") || DESCRY_TOOLS.has(name)));
-    }
     if (event.reason !== "startup" || !ctx.hasUI) return;
     contexts = await probeContexts();
     register();
@@ -418,16 +398,11 @@ export default async function (pi: ExtensionAPI) {
   //   cancel    cancel threshold compaction while the conversation fits Spark
   //   clear     clear answered tool results from future context
   //   digest    write the compaction summary without a model: earlier questions and answers, current turn kept
-  //   focus     Pi's model summary, told which request is current
   //   continue  if a run ends without an answer, continue it once
-  //   rules     AGENT_RULES instead of CODING_RULES
-  //   hint      a research question gets a hidden message telling the model to search first
-  //   tools     a research question gets only RESEARCH_TOOLS for its run
   //   recall    passages of cleared web results that match the task come back with each request
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
   //   map       the system message lists the project's files and where names in the request are defined
   //   firstsmall each request starts on the second model; continuations go to Spark
-  //   descry    only descry's navigation tools stay active when its extension is installed
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
@@ -510,15 +485,6 @@ export default async function (pi: ExtensionAPI) {
           tokensBefore: (event.preparation as any).tokensBefore ?? 0,
         },
       };
-    }
-    if (OPTS.has("focus")) {
-      const { compact } = await import("@earendil-works/pi-coding-agent");
-      const spark = ctx.modelRegistry.find(PROVIDER, SERVERS.spark.id)!;
-      const focus =
-        `The conversation may contain several user questions. The task in progress is the LAST user message: ` +
-        `"${lastPrompt.slice(0, 300)}". Record earlier questions as completed, with their answers. ` +
-        `Never present an earlier question as the current task.`;
-      return { compaction: await (compact as any)(event.preparation, spark, "none", undefined, focus, event.signal) };
     }
     return undefined;
   });
@@ -653,12 +619,6 @@ export default async function (pi: ExtensionAPI) {
     return `Source check: ${lines.join(" ")} Replace it with a source you retrieved, or say the item was not found.`;
   };
 
-  let savedTools: string[] | undefined;
-  pi.on("agent_settled", async () => {
-    if (savedTools) pi.setActiveTools(savedTools);
-    savedTools = undefined;
-  });
-
   pi.on("before_agent_start", async (event, ctx) => {
     continued = false;
     sourcesChecked = false;
@@ -666,19 +626,10 @@ export default async function (pi: ExtensionAPI) {
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;
     map = OPTS.has("map") ? [projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS), namedSymbols(ctx.cwd, event.prompt, NAMES_MAX_CHARS)].filter(Boolean).join("\n\n") : "";
-    const research = ctx.model?.provider === PROVIDER && isResearchQuestion(event.prompt);
-    if (research && OPTS.has("tools")) {
-      savedTools = pi.getActiveTools();
-      pi.setActiveTools(savedTools.filter((name) => RESEARCH_TOOLS.includes(name)));
-    }
     if (thinkingMode === "auto") {
-      const reasoning = REASONING_PROMPT.test(event.prompt) && !(research && OPTS.has("hint"));
+      const reasoning = REASONING_PROMPT.test(event.prompt);
       // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts.
       pi.setThinkingLevel(OPTS.has("think") ? (reasoning ? "high" : "low") : reasoning ? "medium" : "off");
-    }
-    if (research && OPTS.has("hint")) {
-      const content = "This is a research question. Search the web before answering, and answer from what the sources say.";
-      return { message: { customType: "cadre-research", content, display: false } };
     }
     return undefined;
   });
@@ -774,10 +725,9 @@ export default async function (pi: ExtensionAPI) {
   pi.on("context_with_system", async (event) => {
     const system = event.messages?.[0];
     if (system?.role === "system" && typeof system.content === "string") {
-      const rules = OPTS.has("rules") ? AGENT_RULES : CODING_RULES;
       // Pi's prompt has no date, so "latest" or "this year" otherwise means the model's training cutoff.
       const today = `Today's date is ${new Date().toISOString().slice(0, 10)}.`;
-      system.content += "\n" + rules + "\n\n" + today + (map ? "\n\n" + map : "");
+      system.content += "\n" + CODING_RULES + "\n\n" + today + (map ? "\n\n" + map : "");
     }
   });
 }
