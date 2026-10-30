@@ -33,6 +33,7 @@ import { guardReason } from "./guard.ts";
 import { isResearchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
+import { namedSymbols } from "./symbols.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
@@ -70,6 +71,8 @@ const DESCRY_TOOLS = new Set(["descry_search", "descry_quick", "descry_context",
 
 // Most characters of the project file map in the system message (see projectmap.ts).
 const MAP_MAX_CHARS = 2000;
+// Most characters of the definitions of names in the request (see symbols.ts), added with the map.
+const NAMES_MAX_CHARS = 1500;
 
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
@@ -422,7 +425,7 @@ export default async function (pi: ExtensionAPI) {
   //   tools     a research question gets only RESEARCH_TOOLS for its run
   //   recall    passages of cleared web results that match the task come back with each request
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
-  //   map       the system message lists the project's files (see projectmap.ts)
+  //   map       the system message lists the project's files and where names in the request are defined
   //   firstsmall each request starts on the second model; continuations go to Spark
   //   descry    only descry's navigation tools stay active when its extension is installed
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
@@ -662,7 +665,7 @@ export default async function (pi: ExtensionAPI) {
     // Runs started by an extension's custom message have no prompt and keep the last one.
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;
-    map = OPTS.has("map") ? projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS) : "";
+    map = OPTS.has("map") ? [projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS), namedSymbols(ctx.cwd, event.prompt, NAMES_MAX_CHARS)].filter(Boolean).join("\n\n") : "";
     const research = ctx.model?.provider === PROVIDER && isResearchQuestion(event.prompt);
     if (research && OPTS.has("tools")) {
       savedTools = pi.getActiveTools();
