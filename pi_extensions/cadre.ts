@@ -18,7 +18,7 @@
  * review, off otherwise. Every request gets short coding rules appended to the system message.
  */
 
-import { lstatSync, readlinkSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
 
@@ -70,7 +70,7 @@ const MAX_LINKS = 40;
 
 /**
  * Resolves `path` against `cwd` the way the operating system does: one component at a time, following each symlink
- * (even one whose target is missing) before applying any later "..". A symlink loop, or more than MAX_LINKS links,
+ * (even one whose target is missing) before applying any later "..", and taking each existing component's on-disk case. A symlink loop, or more than MAX_LINKS links,
  * resolves to the filesystem root, which the guard always blocks.
  */
 function physicalPath(path: string, cwd: string, links = { count: 0 }): string {
@@ -85,13 +85,16 @@ function physicalPath(path: string, cwd: string, links = { count: 0 }): string {
     }
     const next = join(current, part);
     let isLink = false;
+    let exists = true;
     try {
       isLink = lstatSync(next).isSymbolicLink();
     } catch {
-      // A missing component is not a link; the rest of the path stays lexical.
+      exists = false;
     }
     if (!isLink) {
-      current = next;
+      // realpathSync.native returns the on-disk case, so case-insensitive file systems compare correctly.
+      // A missing component is not a link; the rest of the path stays lexical.
+      current = exists ? realpathSync.native(next) : next;
       continue;
     }
     if (++links.count > MAX_LINKS) return root;

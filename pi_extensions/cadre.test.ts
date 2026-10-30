@@ -176,3 +176,20 @@ test("the guard resolves dangling links and '..' after a link the way the OS doe
   assert.ok(guardReason("write", { path: "loop/x" }, cwd, home));
   assert.equal(guardReason("write", { path: "sub/../ok.py" }, cwd, home), undefined);
 });
+
+test("the guard compares paths in on-disk case on case-insensitive file systems", async (t) => {
+  const { existsSync, mkdtempSync, mkdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "cadre-Home-"));
+  const cwd = join(home, "Proj");
+  mkdirSync(cwd);
+  mkdirSync(join(home, "Other"));
+  if (!existsSync(cwd.toLowerCase())) {
+    t.skip("file system is case-sensitive");
+    return;
+  }
+  assert.ok(guardReason("read", { path: join(home, "Other").toLowerCase() }, cwd, home));
+  assert.ok(guardReason("bash", { command: `ls ${join(home, "other").toUpperCase()}` }, cwd, home));
+  assert.equal(guardReason("write", { path: join(home, "proj", "x.py") }, cwd, home), undefined);
+});
