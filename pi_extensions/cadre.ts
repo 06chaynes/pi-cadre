@@ -25,7 +25,7 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -35,6 +35,7 @@ import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
+import { syntaxError } from "./syntax.ts";
 import { shortenSearch, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
@@ -373,6 +374,16 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", async (event, ctx) => {
+    // A file left unparseable by an edit or write is reported in the same result (see syntax.ts).
+    const path = (event.input as Record<string, unknown>)?.path;
+    if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string") {
+      const error = await syntaxError(isAbsolute(path) ? path : join(ctx.cwd, path));
+      if (error) {
+        const text = `[Syntax check: ${path} no longer parses: ${error.replace(/\n/g, " ")}. Fix it before continuing.]`;
+        return { content: [...event.content, { type: "text" as const, text }] };
+      }
+      return undefined;
+    }
     const note = unseenNote(event.toolName, event.input, (event as any).details, ctx.cwd, lastPrompt);
     let content = note === undefined ? event.content : [...event.content, { type: "text" as const, text: note }];
     const text = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");

@@ -861,3 +861,17 @@ test("a run whose last reply was cut off with no answer continues with a note, w
     else process.env.CADRE_OPTS = saved;
   }
 });
+
+test("an edit that leaves a file unparseable is reported in the same tool result", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const cwd = mkdtempSync(join(tmpdir(), "cadre-edit-"));
+  writeFileSync(join(cwd, "store.py"), 'class A:\n    def release(self):\n        """Releases units.""\n        return 1\n');
+  const event = { toolName: "edit", toolCallId: "e1", input: { path: "store.py" }, content: [{ type: "text", text: "Successfully replaced 1 block(s) in store.py." }], details: {}, isError: false };
+  const result = await calls.handlers["tool_result"](event, { ...uiContext(true).ctx, cwd });
+  assert.match(result.content.at(-1).text, /^\[Syntax check: store\.py no longer parses: SyntaxError: unterminated triple-quoted string literal .*\. Fix it before continuing\.\]$/);
+  writeFileSync(join(cwd, "store.py"), "def f():\n    return 1\n");
+  assert.equal(await calls.handlers["tool_result"](event, { ...uiContext(true).ctx, cwd }), undefined);
+});
