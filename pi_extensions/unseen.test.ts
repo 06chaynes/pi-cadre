@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { keywords, readLinesCapped, unseenNote } from "./unseen.ts";
+import { keywords, readLinesCapped, shortenText, unseenNote } from "./unseen.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -69,4 +69,26 @@ test("readLinesCapped refuses files above the size cap", () => {
   assert.equal(readLinesCapped(join(cwd, "notes.txt"), 1000), undefined);
   assert.equal(readLinesCapped(join(cwd, "notes.txt"), 10_000_000)?.length, 1401);
   assert.equal(readLinesCapped(join(cwd, "missing.txt"), 10_000_000), undefined);
+});
+
+/** A search result shaped like the Wikipedia table that overflowed Spark: about 150,000 characters of rows. */
+function searchResult() {
+  const rows = Array.from({ length: 1800 }, (_, i) => `| ${i + 1} | 2^${(i * 104729) % 9999991} - 1 | ${2_000_000 + i} digits | Mersenne candidate row |`);
+  rows.splice(1200, 0, "The largest known prime, 2^136279841 - 1, was found in October 2024 by Luke Durant (GIMPS).");
+  return ["List of largest known primes", "", ...rows].join("\n");
+}
+
+test("shortenText keeps the start and the lines that match the request, within the limit", () => {
+  const text = searchResult();
+  const short = shortenText(text, "What year was the largest prime number found (so far)?", 30_000);
+  assert.ok(short.length <= 30_000, String(short.length));
+  assert.ok(short.startsWith("List of largest known primes"));
+  assert.match(short, /\d+: The largest known prime, 2\^136279841 - 1, was found in October 2024/);
+  assert.match(short, /shortened from \d+ to fit/);
+});
+
+test("shortenText leaves text within the limit unchanged and cuts one long line by characters", () => {
+  assert.equal(shortenText("short", "anything", 100), "short");
+  const long = shortenText("x".repeat(10_000), "anything", 1_000);
+  assert.ok(long.length <= 1_000 && long.startsWith("xxx"));
 });

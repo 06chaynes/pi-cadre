@@ -145,3 +145,17 @@ test("tool_result appends unseen matching lines to a truncated read", async () =
   assert.equal(result.content[0].text, "filler line");
   assert.match(result.content[1].text, /^51: the release date was March 3$/m);
 });
+
+test("tool_result shortens any oversized result to fit the largest context", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await calls.handlers["before_agent_start"]({ prompt: "What year was the largest prime number found?" });
+  const rows = Array.from({ length: 3000 }, (_, i) => `| ${i} | candidate row with digits and notes |`);
+  rows.splice(2500, 0, "The largest known prime was found in 2024.");
+  const event = { toolName: "web_search", input: { query: "largest prime" }, content: [{ type: "text", text: rows.join("\n") }], details: {} };
+  const result = await calls.handlers["tool_result"](event, { cwd: process.cwd() });
+  const text = result.content.map((c: any) => c.text).join("");
+  assert.ok(text.length <= Math.floor(32768 * 0.4 * 3), String(text.length));
+  assert.match(text, /The largest known prime was found in 2024/);
+});

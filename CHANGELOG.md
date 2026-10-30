@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.2]
+
+### Fixed
+
+- A single tool result could exceed every context window: a web search returned about 40,000 tokens, more than Spark's 32k slot, so moving the turn to Spark (0.2.1) still failed. Any tool result longer than 40% of the largest context window is now shortened to its start plus the lines that contain words from the request, with a note on what was left out. With a 150,000-character search result, the answer line was kept and the question was answered correctly in 2 of 2 runs.
+
 ## [0.2.1]
 
 ### Added

@@ -76,7 +76,7 @@ On machines with more than one GPU, llama.cpp splits layers across all of them. 
 
 With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
 
-When a read or bash result is cut off, the extension appends the lines outside the shown part that contain words from your request, with line numbers, so the model gets them even if it does not page through the rest.
+When a read or bash result is cut off, the extension appends the lines outside the shown part that contain words from your request, with line numbers, so the model gets them even if it does not page through the rest. Any tool result too large for the context window (more than 40% of the largest slot), such as a long web search, is shortened to its start plus the lines that contain words from your request.
 
 Pi commands added by the extension:
 

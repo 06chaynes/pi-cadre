@@ -6,7 +6,7 @@
 
 const MAX_LFM3_PROMPT = 300;
 // English prose runs about 4 characters per token and code or JSON fewer; 3 overestimates both.
-const CHARS_PER_TOKEN = 3;
+export const CHARS_PER_TOKEN = 3;
 const QUESTION_START = /^\s*(what|where|which|who|when|why|how|does|do|is|are|can|could|explain|describe|show|list|find|summari[sz]e)\b/i;
 const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix|change|update|remove|delete|plan|design|review|diagnose|debug|investigate|tests?)\b/i;
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
