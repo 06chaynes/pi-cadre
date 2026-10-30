@@ -20,6 +20,15 @@ function project(files: string[], gitignore?: string) {
   return dir;
 }
 
+test("descry's index cache is not listed as project files", () => {
+  for (const gitignore of [undefined, ""]) {
+    const dir = project(["inventory/store.py", ".descry_cache/codebase_graph.json"], gitignore);
+    const map = projectMap(dir, "", 2000);
+    assert.ok(map.includes("inventory/store.py"));
+    assert.doesNotMatch(map, /descry_cache/);
+  }
+});
+
 test("a small project lists every file, without what git ignores", () => {
   const dir = project(["inventory/store.py", "inventory/__init__.py", "tests/test_store.py", "build/out.bin"], "build/\n");
   const map = projectMap(dir, "", 2000);

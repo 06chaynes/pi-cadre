@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -837,6 +838,34 @@ test("with map, the system message lists the project's files", async () => {
   } finally {
     if (saved === undefined) delete process.env.CADRE_OPTS;
     else process.env.CADRE_OPTS = saved;
+  }
+});
+
+test("with descry, the system message lists descry's symbols for the request, and descry refreshes its index in the background", async () => {
+  const saved = { opts: process.env.CADRE_OPTS, bin: process.env.DESCRY_BIN };
+  const dir = mkdtempSync(join(tmpdir(), "cadre-descry-"));
+  const bin = join(dir, "descry");
+  writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${dir}/args.log'\necho "1. [Met] resolve_redirects | requests/sessions.py:159 (1230t, 6c)"\n`);
+  chmodSync(bin, 0o755);
+  process.env.CADRE_OPTS = "descry";
+  process.env.DESCRY_BIN = bin;
+  try {
+    serveProps({});
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const project = join(dir, "project");
+    mkdirSync(join(project, ".descry_cache"), { recursive: true });
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Where is the redirect limit enforced?" }, { ...uiContext(true).ctx, cwd: project });
+    const system = { role: "system", content: "Pi system prompt" };
+    await calls.handlers["context_with_system"]({ messages: [system] });
+    assert.match(system.content, /Code symbols matching the request \(from descry\):\nresolve_redirects requests\/sessions\.py:159/);
+    for (let i = 0; i < 50 && !/ensure/.test(readFileSync(join(dir, "args.log"), "utf8")); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.match(readFileSync(join(dir, "args.log"), "utf8"), /^ensure$/m, "the index is refreshed in the background");
+  } finally {
+    for (const [key, value] of [["CADRE_OPTS", saved.opts], ["DESCRY_BIN", saved.bin]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 
