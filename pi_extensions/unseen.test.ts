@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { readLinesCapped, shortenSearch, shortenText, unseenNote } from "./unseen.ts";
+import { readLinesCapped, shortenHits, shortenText, unseenNote } from "./unseen.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -102,15 +102,30 @@ test("a shortened search result keeps every hit's title and URL and the passages
     { title: "Nature Machine Intelligence", url: "https://www.nature.com/natmachintell/", body: filler("Article") },
     { title: "arXiv cs.LG recent", url: "https://arxiv.org/list/cs.LG/recent", body: filler("Listing") + "\n\nThe latest ML results: reasoning models now lead the benchmark, per the 2026 survey.\n\n" + filler("Listing") },
   ]);
-  const short = shortenSearch(text, '{"query":"latest ML research results"} What are the latest research results in the field of ML', 3000);
+  const short = shortenHits(text, '{"query":"latest ML research results"} What are the latest research results in the field of ML', 3000);
   assert.ok(short !== undefined && short.length <= 3000, `${short?.length} characters`);
   for (const url of ["proceedings.mlr.press/v267", "stateof.ai/2025", "nature.com/natmachintell", "arxiv.org/list/cs.LG/recent"]) assert.ok(short.includes(url), url);
   assert.match(short, /The latest ML results: reasoning models now lead the benchmark/);
-  assert.match(short, /^\[web_search result shortened from [\d,]+ characters: every hit's title and URL, then the passages that best match the search\. web_fetch a URL for its full text\.\]/);
+  assert.match(short, /^\[Result shortened from [\d,]+ characters: every hit's title and URL, then the passages that best match the request\. Fetch a URL for its full text\.\]/);
+});
+
+test("hits whose URL comes last (pi-web-access's format) are recognized the same way", () => {
+  const filler = Array.from({ length: 3000 }, (_, i) => `Unrelated sentence ${i} about something else entirely.`).join(" ");
+  const hit = (snippet: string, title: string, url: string) => `${snippet}\nSource: ${title} (${url})`;
+  const text = [
+    "**Provider:** searxng",
+    hit(filler, "Index page", "https://a.example/index"),
+    hit("Hopfield and Hinton won the 2024 Nobel Prize in Physics.", "Press release", "https://www.nobelprize.org/prizes/physics/2024/press-release/"),
+    hit(filler, "Other page", "https://c.example/other"),
+  ].join("\n\n");
+  const short = shortenHits(text, '{"queries":["2024 Nobel Prize in Physics"]} Who won the 2024 Nobel Prize in Physics?', 2000);
+  assert.ok(short !== undefined && short.length <= 2000, `${short?.length} characters`);
+  for (const url of ["a.example/index", "nobelprize.org/prizes/physics/2024/press-release", "c.example/other"]) assert.ok(short.includes(url), url);
+  assert.match(short, /Hopfield and Hinton won the 2024 Nobel Prize in Physics\./);
 });
 
 test("text that is not a list of search hits is left to shortenText", () => {
-  assert.equal(shortenSearch("x".repeat(10_000), "query", 3000), undefined);
+  assert.equal(shortenHits("x".repeat(10_000), "query", 3000), undefined);
 });
 
 test("readLinesCapped refuses device files instead of reading forever", () => {

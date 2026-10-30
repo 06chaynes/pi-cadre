@@ -118,25 +118,35 @@ function matchingLines(lines: string[], words: string[], include: (i: number) =>
 const numbered = (matches: { i: number; text: string }[]) =>
   matches.map((m) => `${m.i + 1}: ${m.text.slice(0, MAX_LINE_CHARS)}`).join("\n");
 
-// A search hit as @ollama/pi-web-search writes it: "N. Title", then an indented "URL: ..." line, then the hit's text.
-const SEARCH_HIT = /^(\d+)\. (.*)\n\s+URL: (\S+)/gm;
+// A URL in a result; a block of text that holds one starts a hit, and blocks after it without one belong to it.
+const URL_IN_TEXT = /https?:\/\/\S+/;
 const TITLE_CHARS = 150;
 const SEARCH_PASSAGE_CHARS = 500;
 
 /**
- * A web search result cut to at most `maxChars` by its structure: a note, then every hit's title and URL, each followed
- * by its passages that best match `query` (BM25), the best passage of each hit first and then the best of the rest.
- * Undefined when `text` is not a list of two or more hits (shortenText handles it).
+ * A result made of hits (blocks of text that each carry a URL, in any tool's format) cut to at most `maxChars`: a note,
+ * then every hit's heading lines (its first line and its URL lines), each followed by its passages that best match
+ * `query` (BM25), the best passage of each hit first and then the best of the rest. Undefined when the text holds
+ * fewer than two hits (shortenText handles it).
  */
-export function shortenSearch(text: string, query: string, maxChars: number): string | undefined {
-  const heads = [...text.matchAll(SEARCH_HIT)];
-  if (heads.length < 2) return undefined;
-  const hits = heads.map((m, i) => ({
-    header: `${m[1]}. ${m[2].slice(0, TITLE_CHARS)}\n   URL: ${m[3]}`,
-    body: text.slice(m.index! + m[0].length, i + 1 < heads.length ? heads[i + 1].index : text.length),
-  }));
-  const note = `[web_search result shortened from ${text.length.toLocaleString("en-US")} characters: every hit's title and URL, then the passages that best match the search. web_fetch a URL for its full text.]`;
-  let room = maxChars - note.length - hits.reduce((sum, h) => sum + h.header.length + 2, 0);
+export function shortenHits(text: string, query: string, maxChars: number): string | undefined {
+  const hits: { header: string; body: string }[] = [];
+  const preamble: string[] = [];
+  for (const block of text.split(/\n\s*\n/)) {
+    if (URL_IN_TEXT.test(block)) {
+      const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+      const heading = [...new Set([lines[0], ...lines.filter((line) => URL_IN_TEXT.test(line))])];
+      hits.push({ header: heading.map((line) => line.slice(0, TITLE_CHARS + 100)).join("\n"), body: block });
+    } else if (hits.length) {
+      hits[hits.length - 1].body += "\n\n" + block;
+    } else {
+      preamble.push(block);
+    }
+  }
+  if (hits.length < 2) return undefined;
+  const note = `[Result shortened from ${text.length.toLocaleString("en-US")} characters: every hit's title and URL, then the passages that best match the request. Fetch a URL for its full text.]`;
+  const lead = preamble.join("\n").split("\n")[0]?.slice(0, TITLE_CHARS) ?? "";
+  let room = maxChars - note.length - lead.length - 1 - hits.reduce((sum, h) => sum + h.header.length + 2, 0);
   const all = hits.flatMap((h, hit) => passages({ source: "", text: h.body }, SEARCH_PASSAGE_CHARS).map((p) => ({ hit, text: p.text })));
   const scores = all.length ? bm25(all.map((p) => p.text)).score(query) : [];
   const order = all.map((_, i) => i).filter((i) => scores[i].matched > 0).sort((a, b) => scores[b].score - scores[a].score);
@@ -151,10 +161,10 @@ export function shortenSearch(text: string, query: string, maxChars: number): st
     if (best !== undefined) take(best);
   }
   for (const i of order) if (!chosen.has(i)) take(i);
-  const out = [note];
+  const out = [note, ...(lead ? [lead] : [])];
   hits.forEach((h, hit) => {
     out.push(h.header);
-    all.forEach((p, i) => chosen.has(i) && p.hit === hit && out.push(p.text));
+    all.forEach((p, i) => chosen.has(i) && p.hit === hit && !h.header.includes(p.text) && out.push(p.text));
   });
   return out.join("\n").slice(0, maxChars);
 }

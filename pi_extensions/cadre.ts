@@ -36,7 +36,7 @@ import { projectMap } from "./projectmap.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
-import { shortenSearch, shortenText, unseenNote } from "./unseen.ts";
+import { shortenHits, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
   type ServerKey,
@@ -71,9 +71,9 @@ const MAP_MAX_CHARS = 2000;
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
-// Web tools of @ollama/pi-web-search (web_search, web_fetch) and pi-web-access (web_search, fetch_content,
-// get_search_content).
-const RECALL_TOOLS = new Set(["web_search", "web_fetch", "fetch_content", "get_search_content"]);
+// Pi's own local tools: their output can go stale (a file edited since it was read), and running them again is exact,
+// so their results are never recalled. Every other tool's results can be, whichever extension provides it.
+const LOCAL_TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 // The digest condenses the current request's steps before the last KEEP_STEPS, each as its call and a one-line outcome.
 const KEEP_STEPS = 3;
@@ -94,14 +94,10 @@ const MAX_SHORTEN_ROUNDS = 4;
 // No text runs more than this many characters per token, so a result longer than this many times its budget is cut by
 // length before it is counted (a 2.3 MB search result is not sent whole to two tokenizers).
 const MAX_CHARS_PER_TOKEN = 6;
-// Most hits one web_search returns (the default of @ollama/pi-web-search).
-const SEARCH_MAX_RESULTS = 5;
-// How to see the rest of a shortened result, by tool.
+// How to see the rest of a shortened result: Pi's own paging tools get specific advice, every other tool the default.
 const MORE: Record<string, string> = {
   read: "Read again with offset and limit to see other parts.",
   bash: "Run a narrower command (grep, head, tail, sed -n) to see other parts.",
-  web_fetch: "Fetch a more specific page, or search for the part you need.",
-  fetch_content: "Fetch a more specific page, or search for the part you need.",
 };
 const MORE_DEFAULT = "Call the tool again with a narrower request to see other parts.";
 // Thinking budgets per request, by reasoning effort (never more than half the reply limit).
@@ -319,12 +315,6 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    // More search hits mean more of each to cut away; the tool's own default is enough for a step.
-    const input = event.input as Record<string, unknown>;
-    // The result count is max_results in @ollama/pi-web-search and numResults in pi-web-access.
-    for (const key of ["max_results", "numResults"]) {
-      if (event.toolName === "web_search" && typeof input[key] === "number" && input[key] > SEARCH_MAX_RESULTS) input[key] = SEARCH_MAX_RESULTS;
-    }
     if (!guardOn) return undefined;
     const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());
     return reason === undefined ? undefined : { block: true, reason };
@@ -372,9 +362,7 @@ export default async function (pi: ExtensionAPI) {
     const budget = Math.min(RESULT_MAX_TOKENS, Math.floor(resultRoom() / pendingCalls));
     // Shortening ranks against the call (its query, path, or command) as well as the request.
     const query = `${JSON.stringify(event.input ?? {})} ${lastPrompt}`;
-    const shorten = (chars: number) =>
-      (event.toolName === "web_search" ? shortenSearch(text, query, chars) : undefined) ??
-      shortenText(text, query, chars, MORE[event.toolName] ?? MORE_DEFAULT);
+    const shorten = (chars: number) => shortenHits(text, query, chars) ?? shortenText(text, query, chars, MORE[event.toolName] ?? MORE_DEFAULT);
     let short = text;
     let tokens = text.length > budget * MAX_CHARS_PER_TOKEN ? Infinity : await resultTokens(text);
     if (tokens === Infinity) {
@@ -388,7 +376,7 @@ export default async function (pi: ExtensionAPI) {
     }
     if (short !== text) {
       content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
-      if (OPTS.has("recall") && RECALL_TOOLS.has(event.toolName)) saveOriginal(resultsDir(), ctx.sessionManager.getSessionId(), event.toolCallId, text);
+      if (OPTS.has("recall") && !LOCAL_TOOLS.has(event.toolName)) saveOriginal(resultsDir(), ctx.sessionManager.getSessionId(), event.toolCallId, text);
     }
     return content === event.content ? undefined : { content };
   });
@@ -686,7 +674,7 @@ export default async function (pi: ExtensionAPI) {
     // in context is left out, so only cleared or cut text can come back.
     const sessionId = ctx.sessionManager.getSessionId();
     const cleared = branch.flatMap((m: any) => {
-      if (m.role !== "toolResult" || m.isError || !RECALL_TOOLS.has(m.toolName)) return [];
+      if (m.role !== "toolResult" || m.isError || LOCAL_TOOLS.has(m.toolName)) return [];
       const full = loadOriginal(resultsDir(), sessionId, m.toolCallId) ?? textOf(m);
       const visible = new Set((shown.get(m.toolCallId) ?? "").split("\n"));
       const text = full.split("\n").filter((line: string) => !visible.has(line)).join("\n");

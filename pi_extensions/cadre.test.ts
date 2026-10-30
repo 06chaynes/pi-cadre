@@ -644,19 +644,6 @@ test("an oversized search result keeps every hit, a cut read says how to see mor
   assert.match(read.content.map((c: any) => c.text).join(""), /Read again with offset and limit to see other parts\./);
 });
 
-test("a web search asking for more than 5 results is capped at the tool's default of 5", async () => {
-  serveProps({});
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const { ctx } = uiContext(true);
-  const call = { toolName: "web_search", input: { query: "latest ML research", max_results: 10 } };
-  assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
-  assert.equal(call.input.max_results, 5);
-  const small = { toolName: "web_search", input: { query: "q", max_results: 3 } };
-  await calls.handlers["tool_call"](small, ctx);
-  assert.equal(small.input.max_results, 3);
-});
-
 test("with recall, a passage cut from a shortened web result comes back from its saved original, for the item it answers", async () => {
   const saved = { opts: process.env.CADRE_OPTS, state: process.env.XDG_STATE_HOME };
   process.env.CADRE_OPTS = "clear,recall";
@@ -839,16 +826,13 @@ test("an edit that leaves a file unparseable is reported in the same tool result
   assert.equal(await calls.handlers["tool_result"](event, { ...uiContext(true).ctx, cwd }), undefined);
 });
 
-test("pi-web-access's tools are handled like the Ollama package's: results count capped, fetched pages recalled", async () => {
+test("any extension's tool results are recalled (here pi-web-access's fetch_content), never Pi's local tools", async () => {
   const saved = process.env.CADRE_OPTS;
   process.env.CADRE_OPTS = "clear,recall";
   try {
     serveProps({ 8080: 32768, 8081: 16384 });
     const { pi, calls } = fakePi();
     await extension(pi as any);
-    const call = { toolName: "web_search", input: { queries: ["latest ML research"], numResults: 10 } };
-    await calls.handlers["tool_call"](call, uiContext(true).ctx);
-    assert.equal(call.input.numResults, 5);
     const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Tokyo population.";
     const page = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(400);
     const { session, ids } = realSession([{ role: "user", content: prompt }, toolCall("f1", "fetch_content", { url: "https://x.example" }), toolResult("f1", "fetch_content", page)]);
@@ -859,4 +843,17 @@ test("pi-web-access's tools are handled like the Ollama package's: results count
     if (saved === undefined) delete process.env.CADRE_OPTS;
     else process.env.CADRE_OPTS = saved;
   }
+});
+
+test("a hit-structured result is shortened by its hits whatever the tool is called", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "What are the latest research results in ML?" }, uiContext(true).ctx);
+  const body = Array.from({ length: 20000 }, (_, i) => `line ${i} about ML research results`).join("\n");
+  const text = ["https://a.example/1", "https://b.example/2", "https://c.example/3"].map((url, i) => `${body}\nSource: Hit ${i} (${url})`).join("\n\n");
+  const event = { toolName: "some_other_search", toolCallId: "s1", input: { q: "latest ML" }, content: [{ type: "text", text }], details: {} };
+  const out = (await calls.handlers["tool_result"](event, { cwd: process.cwd() })).content.map((c: any) => c.text).join("");
+  for (const url of ["https://a.example/1", "https://b.example/2", "https://c.example/3"]) assert.ok(out.includes(url), url);
+  assert.match(out, /^\[Result shortened from [\d,]+ characters: every hit's title and URL/);
 });
