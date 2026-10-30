@@ -9,7 +9,7 @@ import json
 import re
 import time
 
-from benchmark_tasks import REPO_DIR, SCOUT_SCHEMA, inject_defect, reset_repo, verify
+from benchmark_tasks import REPO_DIR, inject_defect, reset_repo, scout_schema, verify
 from llama_cpp_client import AutoThinkingPolicy, LlamaCppClient
 from repo_indexer import RepoASTIndexer, words
 
@@ -77,11 +77,11 @@ class RepoBenchmarkRunner:
         ]
         prompt = f"GITHUB ISSUE:\n{issue}\n\nAVAILABLE REPO FUNCTIONS:\n{json.dumps(candidates, indent=1)}\n\nSelect target_file and target_function."
         decision = self.client.chat_json(
-            [{"role": "system", "content": SCOUT_PROMPT}, {"role": "user", "content": prompt}], SCOUT_SCHEMA, max_tokens=200
+            [{"role": "system", "content": SCOUT_PROMPT}, {"role": "user", "content": prompt}],
+            scout_schema(candidates), max_tokens=200, task_intent="scout",
         ) or {}
-        chosen = re.split(r"['\"`\s(){}]", str(decision.get("target_function", "")))[0]
-        print(f" -> Scout picked {decision.get('target_file')}::{chosen}")
-        return chosen == task["function"]
+        print(f" -> Scout picked {decision.get('target_file')}::{decision.get('target_function')}")
+        return decision.get("target_function") == task["function"]
 
     @staticmethod
     def _apply(task, original_lines, start, end, base_indent, code):
@@ -130,7 +130,8 @@ class RepoBenchmarkRunner:
         think = AutoThinkingPolicy.resolve(self.client.thinking_mode, "synthesis")
         code, res = self.client.generate_code(model, SURGEON_PROMPT, user, instruction, prefill, think, max_tokens)
         code = strip_inner_imports(code)
-        print(f" -> {model}: {res['tokens']} tokens at {res['tokens_per_sec']} tok/s (think={think})")
+        print(f" -> {model}: {res['tokens']} tokens at {res['tokens_per_sec']} tok/s (think={think})"
+              + (f", syntax repaired {res['repair']}" if res["repaired"] else ""))
         passed, output = self._apply(task, original_lines, start, end, base_indent, code)
 
         if not passed:
