@@ -40,7 +40,7 @@ case ${MODEL:-dual} in
         exit
         ;;
     spark) ID=${SPARK_MODEL:-XHToken/Spark-X2.6-4B-GGUF:Q4_K_M}; DEFAULTS=(8080 131072 4) ;;
-    lfm3) ID=${LFM3_MODEL:-LiquidAI/LFM3-1.7B-GGUF:Q4_K_M}; DEFAULTS=(8081 32768 16) ;;
+    lfm3) ID=${LFM3_MODEL:-LiquidAI/LFM3-1.7B-GGUF:Q4_K_M}; DEFAULTS=(8081 65536 4) ;;
     *) ID=$MODEL; DEFAULTS=(8080 32768 8) ;;
 esac
 case $ID in

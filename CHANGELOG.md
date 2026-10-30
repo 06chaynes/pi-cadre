@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Added
+
+- `llama-cpp/cadre` model: routes each prompt to LFM3 (questions and single-spot edits) or Spark (everything else). A turn stays on its model, a failed LFM3 request retries on Spark, and compaction runs on Spark. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, and failed a multi-step feature.
+- At startup with a UI, the extension offers to start servers that are not running and to switch to `cadre`. `/cadre-start` starts them on demand.
+
+### Changed
+
+- The path guard allows reads only inside the project and in system directories. It previously allowed anything outside the home directory, which let an agent work in the project's parent under `/tmp` and move a test file out of the project.
+- LFM3 defaults to 4 slots x 16k instead of 16 x 2k; Pi's system prompt and tools do not fit in 2k. The dual profile starts Pi on `cadre`.
+- The extension is split into `cadre.ts`, `servers.ts`, `router.ts`, and `guard.ts`.
+
 ## [0.1.1]
 
 ### Added

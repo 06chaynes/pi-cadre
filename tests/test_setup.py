@@ -91,7 +91,7 @@ def test_server_launcher_single(tmp_path):
     rc, out = run_launcher(tmp_path, "start_llama_server", "-m", "lfm3", "-c", "4096")
     assert rc == 0
     assert out == ["llama-server", "-hf", setup_wizard.LFM3_ID, "--host", "127.0.0.1", "--port", "8081",
-                   "--ctx-size", "4096", "--parallel", "16", "-ngl", "99", "--jinja"]
+                   "--ctx-size", "4096", "--parallel", "4", "-ngl", "99", "--jinja"]
 
 
 def test_server_launcher_local_model_file(tmp_path):
@@ -104,9 +104,21 @@ def test_server_launcher_rejects_unknown_flag(tmp_path):
     assert run_launcher(tmp_path, "start_llama_server", "--nope", "x")[0] == 1
 
 
-def test_pi_launcher(tmp_path):
-    _, out = run_launcher(tmp_path, "pi_cadre")
-    assert out == ["pi", "--provider", "llama-cpp", "--model", setup_wizard.SPARK_ID]
+@pytest.mark.parametrize("model, expected", [
+    ("dual", "cadre"),
+    ("spark", setup_wizard.SPARK_ID),
+    ("lfm3", setup_wizard.LFM3_ID),
+    ("org/other-GGUF", setup_wizard.SPARK_ID),
+])
+def test_pi_launcher_picks_router_or_model(tmp_path, model, expected):
+    _, out = run_launcher(tmp_path, "pi_cadre", config=f"MODEL={model}\n")
+    assert out == ["pi", "--provider", "llama-cpp", "--model", expected]
+
+
+def test_wizard_default_model_for_dual_profile_is_cadre(wizard, tmp_path):
+    wizard.configure_pi(setup_wizard.PROFILES["1"])
+    settings = json.loads((tmp_path / "pi" / "settings.json").read_text())
+    assert (settings["defaultProvider"], settings["defaultModel"]) == ("llama-cpp", "cadre")
 
 
 @posix_only
@@ -114,7 +126,7 @@ def test_server_launcher_dual(tmp_path):
     _, out = run_launcher(tmp_path, "start_llama_server", "-m", "dual", "-c", "999")
     out = " ".join(out)
     assert "--port 8080 --ctx-size 131072 --parallel 4" in out
-    assert "--port 8081 --ctx-size 32768 --parallel 16" in out
+    assert "--port 8081 --ctx-size 65536 --parallel 4" in out
 
 
 @posix_only

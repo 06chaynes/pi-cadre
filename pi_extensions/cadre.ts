@@ -1,56 +1,51 @@
 /**
  * Pi extension for the local llama-server models.
  *
- * Registers the "llama-cpp" provider with Spark-X2.6-4B (port 8080) and LFM3-1.7B (port 8081). Each model's context
- * window is the per-slot context reported by its server's /props at startup, or the launcher default when the server
- * is offline. Thinking levels are sent as chat template kwargs that each model's template accepts.
+ * Registers the "llama-cpp" provider with Spark-X2.6-4B (port 8080) and LFM3-1.7B (port 8081), sized from each
+ * server's per-slot context, and the "llama-cpp/cadre" model, which routes each prompt to one of them (see router.ts).
+ * Thinking levels are sent as chat template kwargs that each model's template accepts.
+ *
+ * At startup with a UI, it offers to start servers that are not running and to switch to cadre when another
+ * provider's model is selected.
  *
  * Commands:
  *   /cadre-status              health, model file, and per-slot context of both servers
+ *   /cadre-start               start the servers that are not running
  *   /cadre-thinking <mode>     auto | off | minimal | low | medium | high
- *   /cadre-guard on|off        path guard, on by default
- *
- * The path guard blocks writes and edits outside the working directory, and reads, searches, and bash commands that
- * reach the filesystem root or the home directory outside the working directory. Bash commands are checked by the
- * paths that appear in them, so the guard catches mistakes rather than enforcing a sandbox.
+ *   /cadre-guard on|off        path guard (see guard.ts), on by default
  *
  * In auto mode the thinking level is set per prompt: medium for planning, architecture, diagnosis, debugging, and
  * review, off otherwise. Every request gets short coding rules appended to the system message.
  */
 
-import { lstatSync, readlinkSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const HOST = "127.0.0.1";
-const THINKING_ENABLED = { $var: "thinking.enabled" };
+import { guardReason } from "./guard.ts";
+import { routeRequest } from "./router.ts";
+import {
+  type Contexts,
+  type ServerKey,
+  SERVER_KEYS,
+  SERVERS,
+  fetchProps,
+  modelConfigs,
+  probeContexts,
+  serverUrl,
+  startServer,
+  waitForHealth,
+} from "./servers.ts";
 
-const SERVERS = {
-  spark: {
-    id: "XHToken/Spark-X2.6-4B-GGUF:Q4_K_M",
-    name: "Spark-X2.6-4B",
-    port: 8080,
-    defaultContext: 32768,
-    // Spark's template accepts reasoning_effort "low" or "high" only.
-    chatTemplateKwargs: { enable_thinking: THINKING_ENABLED, reasoning_effort: { $var: "thinking.effort" } },
-    thinkingLevelMap: { minimal: "low", low: "low", medium: "high", high: "high" },
-  },
-  lfm3: {
-    id: "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
-    name: "LFM3-1.7B",
-    port: 8081,
-    defaultContext: 2048,
-    chatTemplateKwargs: { enable_thinking: THINKING_ENABLED },
-    thinkingLevelMap: undefined,
-  },
-} as const;
-type ServerKey = keyof typeof SERVERS;
+const PROVIDER = "llama-cpp";
+const ROUTER_ID = "cadre";
+// Pi's system prompt and tools take about 1,600 tokens; below this LFM3 cannot hold a turn.
+const LFM3_MIN_CONTEXT = 8192;
+// The first start of a server may download its model from Hugging Face.
+const START_TIMEOUT_MS = 30 * 60 * 1000;
 
 const THINKING_MODES = ["auto", "off", "minimal", "low", "medium", "high"] as const;
 type ThinkingMode = (typeof THINKING_MODES)[number];
-
 const REASONING_PROMPT = /plan|architect|diagnose|root cause|debug|investigate|review/i;
 
 const CODING_RULES = [
@@ -62,141 +57,101 @@ const CODING_RULES = [
   "4. Do not include conversational preambles or post-generation commentary.",
 ].join("\n");
 
-const WRITE_TOOLS = new Set(["write", "edit"]);
-const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
-const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
-
-const MAX_LINKS = 40;
-
-/**
- * Resolves `path` against `cwd` the way the operating system does: one component at a time, following each symlink
- * (even one whose target is missing) before applying any later "..", and taking each existing component's on-disk case. A symlink loop, or more than MAX_LINKS links,
- * resolves to the filesystem root, which the guard always blocks.
- */
-function physicalPath(path: string, cwd: string, links = { count: 0 }): string {
-  const absolute = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
-  const { root } = parse(absolute);
-  let current = root;
-  for (const part of absolute.slice(root.length).split(/[\\/]+/)) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") {
-      current = dirname(current);
-      continue;
-    }
-    const next = join(current, part);
-    let isLink = false;
-    let exists = true;
-    try {
-      isLink = lstatSync(next).isSymbolicLink();
-    } catch {
-      exists = false;
-    }
-    if (!isLink) {
-      // realpathSync.native returns the on-disk case, so case-insensitive file systems compare correctly.
-      // A missing component is not a link; the rest of the path stays lexical.
-      current = exists ? realpathSync.native(next) : next;
-      continue;
-    }
-    if (++links.count > MAX_LINKS) return root;
-    current = physicalPath(readlinkSync(next), current, links);
-  }
-  return current;
-}
-
-function isInside(path: string, root: string): boolean {
-  const rel = relative(root, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-/** Returns a shell word that looks like a path with ~, $HOME, and ${HOME} expanded, or undefined for other words. */
-function shellPath(word: string, home: string): string | undefined {
-  const expanded = word.replace(/^(~|\$\{HOME\}|\$HOME)(?=\/|$)/, home);
-  const looksLikePath = expanded !== word || expanded.startsWith("/") || expanded.startsWith(".") || expanded.includes("/");
-  return looksLikePath ? expanded : undefined;
-}
-
-/**
- * Returns why a tool call reaches outside the project at `cwd`, or undefined when it does not. Writes and edits must
- * stay inside `cwd`. Other paths may not be the filesystem root or inside `home` but outside `cwd`. Paths are compared
- * after following symlinks.
- */
-export function guardReason(toolName: string, input: Record<string, unknown>, cwd: string, home: string): string | undefined {
-  const realCwd = physicalPath(cwd, "/");
-  const realHome = physicalPath(home, "/");
-  const fsRoot = parse(realCwd).root;
-  const outsideReadArea = (path: string) => path === fsRoot || (isInside(path, realHome) && !isInside(path, realCwd));
-  let paths: string[] = [];
-  if (toolName === "bash" && typeof input.command === "string") {
-    paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, home) ?? []);
-  } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
-    paths = [input.path];
-  }
-  const outside = paths
-    .map((path) => physicalPath(path, realCwd))
-    .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : outsideReadArea(path)));
-  return outside === undefined
-    ? undefined
-    : `${toolName} reaches ${outside}, outside the project ${cwd}. Work inside the project, or ask the user to run /cadre-guard off.`;
-}
-
-const serverUrl = (key: ServerKey) => `http://${HOST}:${SERVERS[key].port}`;
-
-async function fetchProps(key: ServerKey): Promise<any | undefined> {
-  try {
-    const res = await fetch(`${serverUrl(key)}/props`, { signal: AbortSignal.timeout(2000) });
-    return res.ok ? await res.json() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Provider model entries. `contexts` holds the per-slot context of each server that answered. */
-export function modelConfigs(contexts: Partial<Record<ServerKey, number>>) {
-  return (Object.keys(SERVERS) as ServerKey[]).map((key) => {
-    const server = SERVERS[key];
-    const window = contexts[key] ?? server.defaultContext;
-    return {
-      id: server.id,
-      name: server.name,
-      baseUrl: `${serverUrl(key)}/v1`,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      reasoning: true,
-      contextWindow: window,
-      maxTokens: Math.min(8192, Math.floor(window / 4)),
-      compat: { thinkingFormat: "chat-template" as const, chatTemplateKwargs: server.chatTemplateKwargs },
-      ...(server.thinkingLevelMap && { thinkingLevelMap: server.thinkingLevelMap }),
-    };
-  });
-}
-
 export default async function (pi: ExtensionAPI) {
-  const keys = Object.keys(SERVERS) as ServerKey[];
-  const props = await Promise.all(keys.map(fetchProps));
-  const contexts = Object.fromEntries(keys.map((key, i) => [key, props[i]?.default_generation_settings?.n_ctx]));
-  pi.registerProvider("llama-cpp", {
-    name: "llama.cpp (local)",
-    api: "openai-completions",
-    apiKey: "none",
-    models: modelConfigs(contexts) as any,
-  });
-
+  let contexts: Contexts = await probeContexts();
   let thinkingMode: ThinkingMode = "auto";
   let guardOn = true;
+
+  const register = () => {
+    const models = modelConfigs(contexts);
+    pi.registerProvider(PROVIDER, { name: "llama.cpp (local)", api: "openai-completions", apiKey: "none", models: models as any });
+    pi.registerVirtualModel({
+      provider: PROVIDER,
+      id: ROUTER_ID,
+      name: "cadre (LFM3 for questions and small edits, Spark otherwise)",
+      thinkingLevels: ["off", "minimal", "low", "medium", "high"],
+      contextWindow: models[0].contextWindow,
+      maxTokens: models[0].maxTokens,
+      input: ["text"],
+      route(request, ctx) {
+        const spark = ctx.modelRegistry.find(PROVIDER, SERVERS.spark.id)!;
+        const lfm3Ready = (contexts.lfm3 ?? 0) >= LFM3_MIN_CONTEXT;
+        const lfm3 = lfm3Ready ? ctx.modelRegistry.find(PROVIDER, SERVERS.lfm3.id) : undefined;
+        return routeRequest(request, { spark, lfm3 }) as any;
+      },
+    });
+  };
+  register();
+
+  /** Starts the offline servers, then re-registers with their real contexts once each is healthy. */
+  const startOffline = async (ctx: ExtensionContext, offline: ServerKey[]) => {
+    for (const key of offline) {
+      try {
+        const log = await startServer(key, process.env, tmpdir());
+        ctx.ui.notify(`Starting ${SERVERS[key].name} on ${serverUrl(key)} (log: ${log})`, "info");
+      } catch (e) {
+        ctx.ui.notify(`Could not start llama-server: ${e instanceof Error ? e.message : e}. Install llama.cpp first.`, "error");
+        return;
+      }
+    }
+    for (const key of offline) {
+      const ready = await waitForHealth(key, START_TIMEOUT_MS);
+      contexts = await probeContexts();
+      register();
+      ctx.ui.notify(`${SERVERS[key].name} ${ready ? "is ready" : "did not become ready; see its log"}`, ready ? "info" : "error");
+    }
+  };
+
+  const offlineServers = () => SERVER_KEYS.filter((key) => contexts[key] === undefined);
+
+  pi.on("session_start", async (event, ctx) => {
+    if (event.reason !== "startup" || !ctx.hasUI) return;
+    contexts = await probeContexts();
+    register();
+    const offline = offlineServers();
+    if (offline.length) {
+      const names = offline.map((key) => SERVERS[key].name).join(" and ");
+      const start = await ctx.ui.confirm(
+        `Start ${names}?`,
+        `llama-server is not running for ${names}. Start it in the background? It keeps running after Pi exits, and its first start may download the model from Hugging Face.`,
+      );
+      if (start) void startOffline(ctx, offline);
+    }
+    if (ctx.model?.provider !== PROVIDER) {
+      const use = await ctx.ui.confirm("Use cadre?", "Switch to llama-cpp/cadre, which routes each prompt to LFM3 or Spark?");
+      const router = ctx.modelRegistry.find(PROVIDER, ROUTER_ID);
+      if (use && router) await pi.setModel(router);
+    }
+  });
+
+  pi.registerCommand("cadre-start", {
+    description: "Start the llama-server instances that are not running",
+    handler: async (_args, ctx) => {
+      contexts = await probeContexts();
+      const offline = offlineServers();
+      if (!offline.length) {
+        ctx.ui.notify("Both servers are running.", "info");
+        return;
+      }
+      await startOffline(ctx, offline);
+    },
+  });
 
   pi.registerCommand("cadre-status", {
     description: "Show health, model file, and per-slot context of both llama-server instances",
     handler: async (_args, ctx) => {
-      const lines = [`Thinking: ${thinkingMode}`];
+      const lines = [`Thinking: ${thinkingMode}`, `Path guard: ${guardOn ? "on" : "off"}`];
       let online = 0;
-      for (const key of keys) {
+      for (const key of SERVER_KEYS) {
         const info = await fetchProps(key);
         online += info ? 1 : 0;
         const detail = info
           ? `${info.model_path?.split(/[\\/]/).pop() ?? "unknown model"}, ${info.default_generation_settings?.n_ctx ?? "?"} tokens per slot`
-          : "offline";
+          : "offline (/cadre-start)";
         lines.push(`${SERVERS[key].name} (${serverUrl(key)}): ${detail}`);
       }
+      const lfm3Routing = (contexts.lfm3 ?? 0) >= LFM3_MIN_CONTEXT ? "on" : `off (needs ${LFM3_MIN_CONTEXT}+ tokens per slot)`;
+      lines.push(`cadre routing to LFM3: ${lfm3Routing}`);
       ctx.ui.notify(lines.join("\n"), online ? "info" : "error");
     },
   });
