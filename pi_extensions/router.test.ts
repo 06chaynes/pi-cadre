@@ -83,3 +83,12 @@ test("direct requests and an unavailable LFM3 go to Spark", () => {
   const previous = { model: lfm3, thinkingLevel: "low" };
   assert.equal(routeRequest(request({ reason: "continuation", previous }), { spark }).model, spark);
 });
+
+test("a file name in any language counts as local code; abbreviations and web domains do not", () => {
+  for (const prompt of ["What does main.swift do?", "What does Program.cs return?", "What does schema.sql define?", "What does init.lua load?", "What does vite.config.mts export?"]) {
+    assert.equal(chooseModel(prompt), "lfm3", prompt);
+  }
+  for (const prompt of ["What is the tallest mountain, e.g. in Asia?", "What does example.com say about Tokyo?", "Who runs wikipedia.org?"]) {
+    assert.equal(chooseModel(prompt), "spark", prompt);
+  }
+});

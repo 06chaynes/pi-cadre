@@ -9,9 +9,18 @@ const QUESTION_START = /^\s*(what|where|which|who|when|why|how|does|do|is|are|ca
 const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix|change|update|remove|delete|plan|design|review|diagnose|debug|investigate|tests?)\b/i;
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
 const MULTI_STEP = /\b(tests?|then|every|all|each|across|refactor|implement)\b/i;
-// A file name, a backticked or snake_case or camelCase identifier, or "this/the repo|code|function|...".
-const LOCAL_REFERENCE =
-  /[\w-]+\.(py|ts|tsx|js|jsx|md|json|toml|ya?ml|rs|go|java|c|h|cpp|sh|txt|cfg|ini)\b|`[^`]+`|\b[a-z0-9]+_[a-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\b/;
+// A file name in any language (a name of two or more characters and an extension, not a web domain), a backticked or
+// snake_case or camelCase identifier, or "this/the repo|code|function|...".
+const WEB_DOMAINS = "com|org|net|edu|gov|io|co|uk|de|jp|fr|info|dev|ai|app";
+const LOCAL_REFERENCE = new RegExp(
+  [
+    `\\b[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
+    "`[^`]+`",
+    "\\b[a-z0-9]+_[a-z0-9_]+\\b",
+    "\\b[a-z]+[A-Z]\\w*\\b",
+    "\\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\\b",
+  ].join("|"),
+);
 
 export type ModelChoice = "spark" | "lfm3";
 
