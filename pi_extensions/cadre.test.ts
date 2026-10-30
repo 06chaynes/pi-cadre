@@ -743,10 +743,47 @@ test("a URL cited only from a failed call gets one corrective step at the end of
   const [note] = result.entries;
   assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
   assert.match(note.content, new RegExp(`research\\.md cites ${bad.replace(/[.?]/g, "\\$&")}, which failed to load \\(Fetch API error \\(status 404\\)`));
-  assert.match(note.content, /Replace it with a source you retrieved, or say the item was not found\./);
+  assert.match(note.content, /Replace a URL that failed with a source you retrieved\./);
   assert.equal((await settle(session))?.continue, undefined, "only once per run");
   const ok = await settle(build(true).session);
   assert.equal(ok?.continue, undefined, "a URL that also loaded is fine");
+});
+
+test("with claims, a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "claims";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const prompt = "Research the year the first iPhone was released and write research.md.";
+    const build = (row: string, final: string) =>
+      realSession([
+        { role: "user", content: prompt },
+        toolCall("s1", "web_search", { query: "first iPhone release year" }),
+        toolResult("s1", "web_search", "The first iPhone was released on June 29, 2007 in the United States.\n\nApple Newsroom, 2007."),
+        toolCall("w1", "write", { path: "research.md", content: `| Item | Answer |\n| --- | --- |\n${row}\n` }),
+        toolResult("w1", "write", "Successfully wrote to research.md"),
+        answer(final),
+      ]).session;
+    const settle = async (session: SessionManager) => {
+      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+      const ctx = { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => 'Rule: "Emit ONLY code inside markdown blocks with exact language tags."' };
+      return calls.handlers["agent_before_settle"](boundary(session), ctx);
+    };
+    const wrong = await settle(build("| First iPhone | 1978 |", "Done. research.md is written."));
+    assert.equal(wrong.continue, true);
+    const [note] = wrong.entries;
+    assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
+    assert.match(note.content, /research\.md: 1978 \(in "\| First iPhone \| 1978 \|"\)/);
+    assert.match(note.content, /closest source passage: "The first iPhone was released on June 29, 2007/);
+    assert.match(note.content, /correct it from a source, show how it was computed from one, or remove it/);
+    const right = await settle(build("| First iPhone | 2007 |", 'Done. I followed "Emit ONLY code inside markdown blocks with exact language tags."'));
+    assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
 });
 
 test("with map, the system message lists the project's files", async () => {

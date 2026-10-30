@@ -36,6 +36,7 @@ import { projectMap } from "./projectmap.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
+import { unsupportedClaims } from "./claims.ts";
 import { shortenHits, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
@@ -73,6 +74,11 @@ const MAP_MAX_CHARS = 2000;
 const RECALL_MAX_CHARS = 6000;
 // Pi's own local tools: their output can go stale (a file edited since it was read), and running them again is exact,
 // so their results are never recalled. Every other tool's results can be, whichever extension provides it.
+// Files whose text is prose an answer may put claims in; code files are left to the syntax check.
+const PROSE_FILE = /\.(md|markdown|txt|rst|adoc|org)$/i;
+// The source check names at most this many unsupported claims, each with this much of its line.
+const MAX_CLAIMS_NAMED = 6;
+const CLAIM_CONTEXT_CHARS = 160;
 const LOCAL_TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
 
 // The digest condenses the current request's steps before the last KEEP_STEPS, each as its call and a one-line outcome.
@@ -580,7 +586,7 @@ export default async function (pi: ExtensionAPI) {
     if (unanswered) return undefined;
     if (!sourcesChecked) {
       sourcesChecked = true;
-      const note = failedSources(ctx);
+      const note = sourceCheck(ctx);
       if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: note, display: true }] };
     }
     if (!OPTS.has("clear")) return undefined;
@@ -589,10 +595,12 @@ export default async function (pi: ExtensionAPI) {
   });
 
   /**
-   * A note for the model when its answer, or a file it wrote in this run, cites a URL that appears only in failed tool
-   * calls and in no result that succeeded: a source it never read. Undefined when every cited URL was read.
+   * A note for the model when its answer, or a prose file it wrote in this run, cites a URL that appears only in failed
+   * tool calls, or (with the claims option) holds a number, quote or URL that no source supports. Sources are the user's
+   * messages, the system prompt, every result that succeeded, and the saved originals of shortened results. Undefined
+   * when everything checks out.
    */
-  const failedSources = (ctx: ExtensionContext) => {
+  const sourceCheck = (ctx: ExtensionContext) => {
     const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
     const start = branch.findLastIndex((m) => m.role === "user");
     const run = branch.slice(start + 1);
@@ -613,20 +621,45 @@ export default async function (pi: ExtensionAPI) {
         for (const url of urls(JSON.stringify(call.arguments ?? {}))) failed.set(url, error);
       }
     }
-    // Where each cited URL appears: a file written in this run, or the final answer.
-    const cited: [string, string][] = [];
+    // What the run produced: prose files written in it, and the final answer.
+    const produced: [string, string][] = [];
     for (const m of run) {
       if (m.role !== "assistant") continue;
       for (const call of (m.content ?? []).filter((b: any) => b.type === "toolCall" && (b.name === "write" || b.name === "edit"))) {
-        for (const url of urls(JSON.stringify(call.arguments ?? {}).replace(/\\n/g, " "))) cited.push([String(call.arguments?.path ?? call.name), url]);
+        const path = String(call.arguments?.path ?? call.name);
+        if (!PROSE_FILE.test(path)) continue;
+        const edits = call.name === "write" ? [call.arguments?.content] : (call.arguments?.edits ?? [call.arguments]).map((e: any) => e?.newText);
+        produced.push([path.split(/[\\/]/).pop()!, edits.filter((t: unknown) => typeof t === "string").join("\n")]);
       }
     }
     const final = [...run].reverse().find((m) => m.role === "assistant" && textOf(m).trim());
-    for (const url of urls(final ? textOf(final) : "")) cited.push(["your answer", url]);
-    const unread = cited.filter(([, url], i) => failed.has(url) && !read.has(url) && cited.findIndex(([, u]) => u === url) === i);
-    if (!unread.length) return undefined;
-    const lines = unread.map(([where, url]) => `${where.split(/[\\/]/).pop()} cites ${url}, which failed to load (${failed.get(url)}) and appears in no tool result that succeeded.`);
-    return `Source check: ${lines.join(" ")} Replace it with a source you retrieved, or say the item was not found.`;
+    if (final) produced.push(["your answer", textOf(final)]);
+    const lines: string[] = [];
+    const named = new Set<string>();
+    for (const [where, text] of produced) {
+      for (const url of urls(text)) {
+        if (!failed.has(url) || read.has(url) || named.has(url)) continue;
+        named.add(url);
+        lines.push(`${where} cites ${url}, which failed to load (${failed.get(url)}) and appears in no tool result that succeeded.`);
+      }
+    }
+    if (OPTS.has("claims")) {
+      const sessionId = ctx.sessionManager.getSessionId?.();
+      const evidence = branch
+        .filter((m) => m.role === "toolResult" && !m.isError)
+        .map((m) => (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m));
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...evidence];
+      for (const [where, text] of produced) {
+        for (const { claim, passage } of unsupportedClaims(text, sources, evidence)) {
+          if (named.has(claim.value) || named.size >= MAX_CLAIMS_NAMED) continue;
+          named.add(claim.value);
+          const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
+          lines.push(`${where}: ${claim.value} (in "${context}") appears in no source${passage ? `; closest source passage: "${passage}"` : ""}.`);
+        }
+      }
+    }
+    if (!lines.length) return undefined;
+    return `Source check:\n- ${lines.join("\n- ")}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it). Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
   };
 
   pi.on("before_agent_start", async (event, ctx) => {
