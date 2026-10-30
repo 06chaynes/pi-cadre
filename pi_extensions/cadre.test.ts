@@ -272,7 +272,8 @@ function afterCompaction(...messages: any[]) {
 
 function digestContext(entries: any[]) {
   const { ctx } = uiContext(true, { provider: "llama-cpp", id: "cadre" });
-  return { ...ctx, sessionManager: { buildSessionProjection: () => ({ messages: [], entries }) } };
+  const branch = entries.flatMap((e) => (e.sourceEntry.type === "message" ? [{ type: "message", message: e.messages[0] }] : []));
+  return { ...ctx, sessionManager: { buildSessionProjection: () => ({ messages: [], entries }), getBranch: () => branch } };
 }
 
 test("the digest carries an earlier compaction summary forward", async () => {
@@ -685,4 +686,50 @@ test("with recall, a passage cut from a shortened web result comes back from its
       else process.env[key] = value;
     }
   }
+});
+
+test("the digest condenses earlier steps of the current request without a model, keeping the request verbatim", async () => {
+  await withDigest(async (calls) => {
+    const prompt = "Research each of these and write research.md:\n1. The largest known prime.\n2. The 2024 Nobel Prize in Physics.";
+    const messages: any[] = [{ role: "user", content: prompt }];
+    for (let i = 0; i < 6; i++) {
+      messages.push(toolCall(`c${i}`, "web_search", { query: `query ${i}` }));
+      messages.push(toolResult(`c${i}`, "web_search", `1. Result title ${i}\n   URL: https://example.org/${i}\n   body ${i}`));
+    }
+    const { session, ids } = realSession(messages);
+    const ctx = { ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session };
+    const result = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 23_000 } }, ctx);
+    const { summary, firstKeptEntryId } = result.compaction;
+    assert.equal(firstKeptEntryId, ids[7], "the last three steps are kept in full");
+    assert.ok(summary.includes(prompt), "the request is kept verbatim");
+    assert.match(summary, /1\. web_search \{"query":"query 0"\} → 1\. Result title 0/);
+    assert.match(summary, /3\. web_search \{"query":"query 2"\} → 1\. Result title 2/);
+    assert.doesNotMatch(summary, /query 3/);
+    session.appendCompaction(summary, firstKeptEntryId, 23_000);
+    const after = session.buildSessionContext().messages;
+    assert.equal(after[0].role, "compactionSummary");
+    assert.equal(after[1].role, "assistant");
+    const callIds = new Set(after.flatMap((m: any) => (m.role === "assistant" ? m.content.filter((b: any) => b.type === "toolCall").map((b: any) => b.id) : [])));
+    assert.ok(after.filter((m: any) => m.role === "toolResult").every((m: any) => callIds.has(m.toolCallId)), "every kept result has its call");
+  });
+});
+
+test("a second digest in the same request carries the condensed steps forward and keeps the request once", async () => {
+  await withDigest(async (calls) => {
+    const prompt = "Research each of these:\n1. The largest known prime.\n2. Tokyo population.";
+    const step = (i: number) => [toolCall(`c${i}`, "web_search", { query: `query ${i}` }), toolResult(`c${i}`, "web_search", `1. Title ${i}\n   URL: https://e.org/${i}\n   x`)];
+    const { session } = realSession([{ role: "user", content: prompt }, ...[0, 1, 2, 3, 4, 5].flatMap(step)]);
+    const ctx = { ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session };
+    const compact = async () => {
+      const { compaction } = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 23_000 } }, ctx);
+      session.appendCompaction(compaction.summary, compaction.firstKeptEntryId, 23_000);
+      return compaction.summary as string;
+    };
+    await compact();
+    for (const i of [6, 7, 8]) for (const m of step(i)) session.appendMessage({ timestamp: 100 + i, ...m } as any);
+    const second = await compact();
+    assert.equal(second.split(prompt).length - 1, 1, "the request appears once, verbatim");
+    for (let i = 0; i <= 5; i++) assert.match(second, new RegExp(`${i + 1}\\. web_search \\{"query":"query ${i}"\\}`));
+    assert.doesNotMatch(second, /query 6/);
+  });
 });

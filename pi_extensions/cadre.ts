@@ -68,6 +68,13 @@ const EXTRACT_BUDGET_CHARS = 12000;
 const RECALL_MAX_CHARS = 6000;
 const RECALL_TOOLS = new Set(["web_search", "web_fetch"]);
 
+// The digest condenses the current request's steps before the last KEEP_STEPS, each as its call and a one-line outcome.
+const KEEP_STEPS = 3;
+const STEP_ARGS_CHARS = 150;
+const STEP_OUTCOME_CHARS = 120;
+const REQUEST_HEADING = "The current request (verbatim):";
+const STEPS_HEADING = "Steps already taken for it (condensed by cadre without a model; their full results stay in the session):";
+
 // Size of the digest of earlier requests, and how much of an older answer it keeps once that size is reached.
 const DIGEST_MAX_CHARS = 7000;
 const DIGEST_SHORT_ANSWER_CHARS = 200;
@@ -405,25 +412,57 @@ export default async function (pi: ExtensionAPI) {
       const entries = ctx.sessionManager.buildSessionProjection().entries;
       const isUser = (e: any) => e.sourceEntry.type === "message" && e.messages[0]?.role === "user";
       const current = entries.map(isUser).lastIndexOf(true);
-      // With no earlier request to condense, cutting at the current one frees nothing and Pi would compact again at
-      // once; Pi's own compaction can cut inside the current turn instead.
-      if (!entries.slice(0, current).some(isUser)) return undefined;
-      // Earlier requests as [question, answer] pairs; a model-written summary is kept as one pair without a question.
+      // The current request comes from the session itself: after an earlier compaction it is no longer in context.
+      const branch = ctx.sessionManager.getBranch() as any[];
+      const request = textOf([...branch].reverse().find((e) => e.type === "message" && e.message.role === "user")?.message ?? {});
+      const steps = entries.slice(current + 1).filter((e: any) => e.sourceEntry.type === "message" && e.messages[0]?.role === "assistant");
+      const condense = steps.length > KEEP_STEPS;
+      if (!condense && !entries.slice(0, Math.max(current, 0)).some(isUser)) return undefined;
+      // Earlier requests as [question, answer] pairs; summaries (a model's, or this digest's) carry forward.
       const pairs: [string, string][] = [];
-      for (const e of entries.slice(0, current)) {
+      const carried: string[] = [];
+      // Earlier requests end where the current one starts (or, once it is summarized, at its first remaining step).
+      for (const e of entries.slice(0, current >= 0 ? current : entries.indexOf(steps[0]))) {
         for (const message of e.messages) {
           const text = textOf(message).trim();
           if (message.role === "user") pairs.push([text.slice(0, 500), ""]);
           else if (message.role === "assistant" && text && pairs.length) pairs[pairs.length - 1][1] = text.slice(0, 1500);
-          else if (message.role !== "assistant" && message.role !== "toolResult" && text) pairs.push(...digestPairs(text));
+          else if (message.role !== "assistant" && message.role !== "toolResult" && text) {
+            const [earlier, stepBlock] = text.split(STEPS_HEADING);
+            if (stepBlock) carried.push(...stepBlock.split("\n").filter((line: string) => /^\d+\. /.test(line)).map((line: string) => line.replace(/^\d+\. /, "")));
+            const prior = earlier.split(REQUEST_HEADING)[0].trim();
+            if (prior) pairs.push(...digestPairs(prior));
+          }
         }
       }
-      const lines = ["Earlier in this session (condensed by cadre without a model; newest answers are verbatim):", ...renderDigest(pairs)];
-      lines.push("The current request and all work on it follow unchanged.");
+      const lines = pairs.length ? ["Earlier in this session (condensed by cadre without a model; newest answers are verbatim):", ...renderDigest(pairs)] : [];
+      if (!condense) {
+        lines.push("The current request and all work on it follow unchanged.");
+        return { compaction: { summary: lines.join("\n"), firstKeptEntryId: entries[current].sourceEntry.id, tokensBefore: (event.preparation as any).tokensBefore ?? 0 } };
+      }
+      // Steps before the last KEEP_STEPS: each call and a one-line outcome. Their full results stay in the session.
+      const results = new Map<string, any>();
+      for (const e of entries) for (const m of e.messages) if (m.role === "toolResult") results.set(m.toolCallId, m);
+      const outcome = (call: any) => {
+        const result = results.get(call.id);
+        if (!result) return "no result";
+        const text = textOf(result).trim();
+        const first = text.split("\n").find((line: string) => line.trim())?.trim().slice(0, STEP_OUTCOME_CHARS) ?? "";
+        if (result.isError) return `error: ${first}`;
+        return text.startsWith(`[${call.name} result, `) ? first.replace(/\..*$/, ".]") : first || "empty result";
+      };
+      for (const e of steps.slice(0, steps.length - KEEP_STEPS)) {
+        const message = e.messages[0] as any;
+        const calls = (message.content ?? []).filter((b: any) => b.type === "toolCall");
+        for (const call of calls) carried.push(`${call.name} ${JSON.stringify(call.arguments ?? {}).slice(0, STEP_ARGS_CHARS)} → ${outcome(call)}`);
+        if (!calls.length && textOf(message).trim()) carried.push(`said: ${textOf(message).trim().slice(0, STEP_OUTCOME_CHARS)}`);
+      }
+      lines.push(REQUEST_HEADING, request, STEPS_HEADING, ...carried.map((line, i) => `${i + 1}. ${line}`));
+      lines.push("The most recent steps follow unchanged.");
       return {
         compaction: {
           summary: lines.join("\n"),
-          firstKeptEntryId: entries[current].sourceEntry.id,
+          firstKeptEntryId: steps[steps.length - KEEP_STEPS].sourceEntry.id,
           tokensBefore: (event.preparation as any).tokensBefore ?? 0,
         },
       };
