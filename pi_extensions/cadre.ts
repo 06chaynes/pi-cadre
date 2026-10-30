@@ -111,6 +111,8 @@ const NOTE_TOOL = {
     return { content: [{ type: "text" as const, text: "Noted." }], details: undefined };
   },
 };
+const NOTE_NOTICE =
+  "[This result can leave context after your next step. Record with the note tool any fact from it you will need later, in the same response as your next tool calls.]";
 const SUPERSEDED = (topic: string) => `Superseded by a later note on ${topic}.`;
 
 const CODING_RULES = [
@@ -367,6 +369,10 @@ export default async function (pi: ExtensionAPI) {
         tokens = await resultTokens(short);
       }
       content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
+    }
+    // The model gets one full read of a large result before clearing may take it, so it is told while reading.
+    if (noteTool && OPTS.has("clear") && ctx.model?.provider === PROVIDER && text.length >= CLEAR_MIN_CHARS) {
+      content = [...content, { type: "text" as const, text: NOTE_NOTICE }];
     }
     return content === event.content ? undefined : { content };
   });

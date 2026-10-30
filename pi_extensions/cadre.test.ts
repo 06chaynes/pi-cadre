@@ -617,3 +617,17 @@ test("a rejected note is never restored", async () => {
   session.appendCompaction("summary", ids[3], 10_000);
   assert.equal(await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session)), undefined);
 });
+
+test("a large result tells the model, as it reads it, to note what it needs before the result leaves context", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Research twelve facts" }, uiContext(true).ctx);
+  const ctx = { ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, cwd: process.cwd() };
+  const event = (text: string) => ({ toolName: "web_search", toolCallId: "c1", input: { query: "q" }, content: [{ type: "text", text }], details: {} });
+  const large = await calls.handlers["tool_result"](event("The 2024 prime has 41,024,320 digits. " + "x".repeat(3000)), ctx);
+  assert.match(large.content.at(-1).text, /can leave context after your next step.*note/i);
+  assert.equal(await calls.handlers["tool_result"](event("short result"), ctx), undefined);
+  const other = await calls.handlers["tool_result"](event("y".repeat(3000)), { ...ctx, model: { provider: "ollama", id: "gemma" } });
+  assert.equal(other, undefined);
+});
