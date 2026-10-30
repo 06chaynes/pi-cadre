@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -652,4 +654,35 @@ test("a web search asking for more than 5 results is capped at the tool's defaul
   const small = { toolName: "web_search", input: { query: "q", max_results: 3 } };
   await calls.handlers["tool_call"](small, ctx);
   assert.equal(small.input.max_results, 3);
+});
+
+test("with recall, a passage cut from a shortened web result comes back from its saved original, for the item it answers", async () => {
+  const saved = { opts: process.env.CADRE_OPTS, state: process.env.XDG_STATE_HOME };
+  process.env.CADRE_OPTS = "clear,recall";
+  process.env.XDG_STATE_HOME = (await import("node:fs")).mkdtempSync(join(tmpdir(), "cadre-state-"));
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Who won the 2024 Nobel Prize in Physics.";
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    // Hundreds of lines match item 1 closely, so shortening (which ranks lines against the whole request) fills its
+    // room with them and cuts the one line that answers item 2.
+    const item1 = Array.from({ length: 3000 }, (_, i) => `Record ${i}: the largest known prime number of its year was found with these digits.`).join("\n");
+    const big = item1 + "\n\nHopfield and Hinton won the 2024 Nobel Prize in Physics for work on neural networks.\n\n" + "tail\n".repeat(100);
+    const { session } = realSession([{ role: "user", content: prompt }, toolCall("c1", "web_fetch", { url: "https://x.example" })]);
+    const event = { toolName: "web_fetch", toolCallId: "c1", input: { url: "https://x.example" }, content: [{ type: "text", text: big }], details: {} };
+    const ctx = { ...toolContext(session), cwd: process.cwd() };
+    const shortened = await calls.handlers["tool_result"](event, ctx);
+    const shown = shortened.content.map((c: any) => c.text).join("");
+    assert.doesNotMatch(shown, /Hopfield and Hinton/, "the answer to item 2 was cut");
+    session.appendMessage({ ...toolResult("c1", "web_fetch", shown), timestamp: 3 } as any);
+    const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, ctx);
+    assert.match(JSON.stringify(result.messages.at(-1).content), /Hopfield and Hinton won the 2024 Nobel Prize in Physics/);
+  } finally {
+    for (const [key, value] of [["CADRE_OPTS", saved.opts], ["XDG_STATE_HOME", saved.state]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

@@ -32,6 +32,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { guardReason } from "./guard.ts";
 import { isResearchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
+import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { shortenSearch, shortenText, unseenNote } from "./unseen.ts";
 import {
@@ -92,6 +93,8 @@ const MORE_DEFAULT = "Call the tool again with a narrower request to see other p
 const SLOT_MARGIN_TOKENS = 64;
 // Private to the user; a shared temporary directory would let another user redirect the logs.
 const LOG_DIR = join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pi-cadre");
+// Full text of shortened web results (see originals.ts); read from the environment at use, like the state directory.
+const resultsDir = () => join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pi-cadre", "results");
 // The first start of a server may download its model from Hugging Face.
 const START_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -230,6 +233,7 @@ export default async function (pi: ExtensionAPI) {
   const offlineServers = () => SERVER_KEYS.filter((key) => contexts[key] === undefined);
 
   pi.on("session_start", async (event, ctx) => {
+    pruneOriginals(resultsDir(), Date.now());
     if (event.reason !== "startup" || !ctx.hasUI) return;
     contexts = await probeContexts();
     register();
@@ -359,7 +363,10 @@ export default async function (pi: ExtensionAPI) {
       short = shorten(Math.floor(short.length * (budget / tokens) * 0.95));
       tokens = await resultTokens(short);
     }
-    if (short !== text) content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
+    if (short !== text) {
+      content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
+      if (OPTS.has("recall") && RECALL_TOOLS.has(event.toolName)) saveOriginal(resultsDir(), ctx.sessionManager.getSessionId(), event.toolCallId, text);
+    }
     return content === event.content ? undefined : { content };
   });
 
@@ -591,9 +598,18 @@ export default async function (pi: ExtensionAPI) {
       if (m.role !== "assistant") continue;
       for (const block of m.content ?? []) if (block.type === "toolCall") calls.set(block.id, `${block.name} ${JSON.stringify(block.arguments ?? {})}`);
     }
-    const cleared = branch.filter((m: any) => m.role === "toolResult" && !m.isError && RECALL_TOOLS.has(m.toolName) && shown.get(m.toolCallId) !== textOf(m));
+    // A web result's full text is its saved original when it was shortened, else its text in the session; what is still
+    // in context is left out, so only cleared or cut text can come back.
+    const sessionId = ctx.sessionManager.getSessionId();
+    const cleared = branch.flatMap((m: any) => {
+      if (m.role !== "toolResult" || m.isError || !RECALL_TOOLS.has(m.toolName)) return [];
+      const full = loadOriginal(resultsDir(), sessionId, m.toolCallId) ?? textOf(m);
+      const visible = new Set((shown.get(m.toolCallId) ?? "").split("\n"));
+      const text = full.split("\n").filter((line: string) => !visible.has(line)).join("\n");
+      return text.trim() ? [{ toolCallId: m.toolCallId, source: calls.get(m.toolCallId) ?? m.toolName, text }] : [];
+    });
     if (!cleared.length) return undefined;
-    const stored = cleared.map((m: any) => ({ source: calls.get(m.toolCallId) ?? m.toolName, text: textOf(m) }));
+    const stored = cleared.map(({ source, text }) => ({ source, text }));
     const task = textOf([...branch].reverse().find((m: any) => m.role === "user") ?? {});
     const step = [...messages].reverse().find((m: any) => m.role === "assistant");
     const stepText = step ? `${textOf(step)} ${(step.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => JSON.stringify(b.arguments)).join(" ")}` : "";
