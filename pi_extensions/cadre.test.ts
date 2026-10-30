@@ -124,3 +124,24 @@ test("the tool_call hook blocks until /cadre-guard off", async () => {
   await calls.commands["cadre-guard"].handler("off", ctx);
   assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
 });
+
+test("tool_result appends unseen matching lines to a truncated read", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const cwd = mkdtempSync(join(tmpdir(), "cadre-tr-"));
+  writeFileSync(join(cwd, "log.txt"), [...Array(50).fill("filler line"), "the release date was March 3"].join("\n"));
+  await calls.handlers["before_agent_start"]({ prompt: "When was the release date?" });
+  const event = {
+    toolName: "read",
+    input: { path: "log.txt" },
+    content: [{ type: "text", text: "filler line" }],
+    details: { truncation: { truncated: true, outputLines: 10, totalLines: 51 } },
+  };
+  const result = await calls.handlers["tool_result"](event, { cwd });
+  assert.equal(result.content[0].text, "filler line");
+  assert.match(result.content[1].text, /^51: the release date was March 3$/m);
+});

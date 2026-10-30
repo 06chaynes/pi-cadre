@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.2.1]
 
+### Added
+
+- Truncated read and bash results get the lines outside the shown part that contain words from the request, with line numbers. Asked for a fact on line 901 of a 116 KB file, Spark read the first 50 KB, sampled the end, and answered that the fact was absent in 2 of 2 runs; with the matches appended it answered correctly in 3 of 3, in 3 to 5 seconds.
+
 ### Fixed
 
 - `cadre` kept a turn on LFM3 after a large tool result, and the next request exceeded LFM3's context (a 30k-token web search against a 16k slot). The router now estimates each request's size and sends it to Spark when it would not fit LFM3 with room for the reply. llama.cpp's context error did not trigger Pi's retry, so the retry path could not catch it.

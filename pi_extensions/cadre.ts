@@ -15,7 +15,8 @@
  *   /cadre-guard on|off        path guard (see guard.ts), on by default
  *
  * In auto mode the thinking level is set per prompt: medium for planning, architecture, diagnosis, debugging, and
- * review, off otherwise. Every request gets short coding rules appended to the system message.
+ * review, off otherwise. Truncated read and bash results get the unseen lines that match the request (see unseen.ts).
+ * Every request gets short coding rules appended to the system message.
  */
 
 import { homedir } from "node:os";
@@ -25,6 +26,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { guardReason } from "./guard.ts";
 import { routeRequest } from "./router.ts";
+import { unseenNote } from "./unseen.ts";
 import {
   type Contexts,
   type ServerKey,
@@ -64,6 +66,7 @@ export default async function (pi: ExtensionAPI) {
   let contexts: Contexts = await probeContexts();
   let thinkingMode: ThinkingMode = "auto";
   let guardOn = true;
+  let lastPrompt = "";
 
   const register = () => {
     const models = modelConfigs(contexts);
@@ -192,7 +195,13 @@ export default async function (pi: ExtensionAPI) {
     return reason === undefined ? undefined : { block: true, reason };
   });
 
+  pi.on("tool_result", async (event, ctx) => {
+    const note = unseenNote(event.toolName, event.input, (event as any).details, ctx.cwd, lastPrompt);
+    return note === undefined ? undefined : { content: [...event.content, { type: "text" as const, text: note }] };
+  });
+
   pi.on("before_agent_start", async (event) => {
+    if (event.prompt) lastPrompt = event.prompt;
     if (thinkingMode === "auto" && event.prompt) {
       pi.setThinkingLevel(REASONING_PROMPT.test(event.prompt) ? "medium" : "off");
     }
