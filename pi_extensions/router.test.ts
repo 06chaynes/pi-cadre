@@ -92,3 +92,15 @@ test("a file name in any language counts as local code; abbreviations and web do
     assert.equal(chooseModel(prompt), "spark", prompt);
   }
 });
+
+test("an edit that started on LFM3 continues on Spark; a question stays on LFM3", () => {
+  const lfm3 = { id: "lfm3" };
+  const spark = { id: "spark" };
+  const previous = { model: lfm3, thinkingLevel: "off" };
+  const continuing = (prompt: string) => routeRequest({ reason: "continuation", previous, thinkingLevel: "off", messages: [{ role: "user", content: prompt }] }, { spark, lfm3 }).model.id;
+  // In local-code tasks, LFM3 alone placed a doc comment on the wrong declaration (4/6); starting on LFM3 and
+  // finishing on Spark was right every time (30/30).
+  assert.equal(continuing("Add a one-line doc comment to `release` in src/inventory.ts saying what it does."), "spark");
+  assert.equal(continuing("Rename the method `release` to `unreserve` in src/lib.rs."), "spark");
+  assert.equal(continuing("What does `available` in inventory/store.py return?"), "lfm3");
+});

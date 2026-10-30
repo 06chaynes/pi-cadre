@@ -1,6 +1,6 @@
 /**
- * Model routing for the "cadre" virtual model. LFM3 answers questions about local code and makes single-spot edits;
- * Spark does everything else, including questions that may need web research. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, but lost track
+ * Model routing for the "cadre" virtual model. LFM3 answers questions about local code and takes the first step of a
+ * single-spot edit, which Spark finishes; Spark does everything else, including questions that may need web research. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, but lost track
  * of the working directory and damaged files on a multi-step feature, so anything multi-step goes to Spark.
  */
 
@@ -52,9 +52,9 @@ interface RouteModels<M> {
 }
 
 /**
- * Physical model and thinking level for one request. A turn stays on the model that started it unless LFM3 is not
- * passed (the caller leaves it out when the conversation outgrows it), a failed request retries on Spark, and requests
- * outside the agent loop (compaction summaries) go to Spark.
+ * Physical model and thinking level for one request. A question stays on the model that started it unless LFM3 is not
+ * passed (the caller leaves it out when the conversation outgrows it); a change continues on Spark; a failed request
+ * retries on Spark; and requests outside the agent loop (compaction summaries) go to Spark.
  */
 export function routeRequest<M extends { id: string }>(request: any, models: RouteModels<M>) {
   const { spark, lfm3 } = models;
@@ -66,8 +66,11 @@ export function routeRequest<M extends { id: string }>(request: any, models: Rou
     }
     case "continuation": {
       const previous = request.previous;
+      // A change continues on Spark: LFM3 is quick to read and locate, but placed edits wrong where Spark did not.
+      const text = promptText(request.messages);
+      const change = SMALL_EDIT.test(text) || CHANGE.test(text);
       return {
-        model: isLfm3(previous?.model) ? (lfm3 as M) : spark,
+        model: isLfm3(previous?.model) && !change ? (lfm3 as M) : spark,
         thinkingLevel: previous?.thinkingLevel ?? request.thinkingLevel,
       };
     }
