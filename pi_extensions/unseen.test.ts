@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { keywords, readLinesCapped, shortenText, unseenNote } from "./unseen.ts";
+import { readLinesCapped, shortenText, unseenNote } from "./unseen.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -18,10 +18,6 @@ function notesFile() {
 }
 
 const truncated = (outputLines: number, totalLines = 1401) => ({ truncation: { truncated: true, outputLines, totalLines } });
-
-test("keywords keeps the distinctive words of a request", () => {
-  assert.deepEqual(keywords(QUESTION), ["year", "largest", "known", "prime", "found", "notes", "txt"]);
-});
 
 test("a truncated read gets the unseen lines that match the request", () => {
   const cwd = notesFile();
@@ -91,9 +87,4 @@ test("shortenText leaves text within the limit unchanged and cuts one long line 
   assert.equal(shortenText("short", "anything", 100), "short");
   const long = shortenText("x".repeat(10_000), "anything", 1_000);
   assert.ok(long.length <= 1_000 && long.startsWith("xxx"));
-});
-
-test("keywords keep two-character acronyms written in capitals, not short lowercase words", () => {
-  assert.deepEqual(keywords("What are the latest research results in the field of ML?"), ["latest", "research", "results", "field", "ml"]);
-  assert.deepEqual(keywords("Is AI or 3D printing in it?"), ["ai", "3d", "printing"]);
 });

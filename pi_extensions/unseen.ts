@@ -13,33 +13,11 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import { keywords } from "./text.ts";
+
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_MATCHES = 20;
 const MAX_LINE_CHARS = 300;
-export const STOPWORDS = new Set(
-  ("about according all also and answer any are but can could did does each explain file for from get give had has " +
-    "have how into its just like not one only our out please read sentence should show some tell than that the " +
-    "their them then there they this use using was were what when where which who why will with would you your")
-    .split(" "),
-);
-
-/**
- * Search terms of a text, in order and lowercased: words of three or more letters and digits, and two-character
- * acronyms written in capitals (ML, AI, 3D), without stopwords.
- */
-export function terms(text: string): string[] {
-  const words = text.match(/\b[A-Z0-9]*[A-Z][A-Z0-9]*\b|[A-Za-z0-9]+/g) ?? [];
-  return words
-    .filter((word) => word.length >= 3 || (word.length === 2 && word === word.toUpperCase() && /[A-Z]/.test(word)))
-    .map((word) => word.toLowerCase())
-    .filter((word) => !STOPWORDS.has(word));
-}
-
-/** Distinctive words of a request, in order, each once (see terms). */
-export function keywords(prompt: string): string[] {
-  return [...new Set(terms(prompt))];
-}
-
 /** Lines of a text file, or undefined when it is missing, unreadable, or larger than `maxBytes`. */
 export function readLinesCapped(path: string, maxBytes: number): string[] | undefined {
   try {

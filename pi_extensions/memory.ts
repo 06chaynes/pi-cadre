@@ -4,7 +4,7 @@
  * choosing to keep it.
  */
 
-import { terms as words } from "./unseen.ts";
+import { bm25 } from "./text.ts";
 
 export interface Stored {
   /** The call that produced the text, such as `web_search {"query":"..."}`. */
@@ -19,9 +19,6 @@ export interface Passage {
   from: number;
 }
 
-// BM25 parameters (the usual defaults).
-const K1 = 1.2;
-const B = 0.75;
 // Share of a query's terms a passage must contain to be recalled (at least two): a passage that merely mentions the
 // topic is left out rather than recalled as filler.
 const MIN_TERM_SHARE = 0.4;
@@ -31,11 +28,6 @@ const MIN_PASSAGE_CHARS = 120;
 const ANNOTATION = /^\[(Result shortened from |Lines outside the part shown above |This result can leave context )/;
 // A list item in a task: "1. ...", "2) ...", "- ...", "* ...".
 const ITEM = /^\s*(?:\d+[.)]|[-*•])\s+(.+)$/;
-
-/** Search terms (see unseen.ts) with a plural "s" removed. */
-function terms(text: string): string[] {
-  return words(text).map((word) => (word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word));
-}
 
 /**
  * Passages of at most `maxChars`: runs of non-blank lines, a short run joined to the next, split further when a run is
@@ -78,29 +70,18 @@ export function taskQueries(task: string, step: string): string[] {
 export function recall(stored: readonly Stored[], queries: readonly string[], budgetChars: number): Passage[] {
   const all = stored.flatMap((s, i) => passages(s, Math.max(200, Math.floor(budgetChars / Math.max(1, queries.length))), i));
   if (!all.length) return [];
-  const docs = all.map((p) => terms(p.text));
-  const avg = docs.reduce((sum, d) => sum + d.length, 0) / docs.length;
-  const df = new Map<string, number>();
-  for (const d of docs) for (const t of new Set(d)) df.set(t, (df.get(t) ?? 0) + 1);
-  const idf = (t: string) => Math.log(1 + (docs.length - (df.get(t) ?? 0) + 0.5) / ((df.get(t) ?? 0) + 0.5));
+  const index = bm25(all.map((p) => p.text));
   const chosen = new Set<number>();
   const out: Passage[] = [];
   let used = 0;
   for (const query of queries) {
-    const q = [...new Set(terms(query))];
+    const q = index.queryTerms(query);
     if (!q.length) continue;
     const need = Math.min(q.length, Math.max(2, Math.ceil(q.length * MIN_TERM_SHARE)));
     let best = -1;
     let bestScore = 0;
-    docs.forEach((d, i) => {
-      if (chosen.has(i)) return;
-      const counts = new Map<string, number>();
-      for (const t of d) counts.set(t, (counts.get(t) ?? 0) + 1);
-      if (q.filter((t) => counts.has(t)).length < need) return;
-      const score = q.reduce((sum, t) => {
-        const f = counts.get(t) ?? 0;
-        return sum + (f ? (idf(t) * f * (K1 + 1)) / (f + K1 * (1 - B + (B * d.length) / avg)) : 0);
-      }, 0);
+    index.score(query).forEach(({ score, matched }, i) => {
+      if (chosen.has(i) || matched < need) return;
       if (score > bestScore) [best, bestScore] = [i, score];
     });
     if (best < 0 || used + all[best].text.length > budgetChars) continue;
