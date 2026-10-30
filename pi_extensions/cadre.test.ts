@@ -380,8 +380,8 @@ test("after an answered run, large tool results are replaced in the model's cont
   await extension(pi as any);
   const { session } = answeredRun(39_000);
   const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
-  assert.match(seen[2], /^\[web_search result, 39,034 characters, cleared from context after the answer\. Run web_search again if more of it is needed\. It began:\]\nSperm whales dive for 45 minutes\./);
-  assert.ok(seen[2].length < 1000);
+  assert.match(seen[2], /^\[web_search result, 39,034 characters, cleared from context after the answer; its opening and the lines matching its call and the request are kept\. Run web_search again for the rest\.\]\nSperm whales dive for 45 minutes\./);
+  assert.ok(seen[2].length < 1300);
   assert.equal(seen[3], "About 45 minutes on average.");
 });
 
@@ -417,7 +417,7 @@ test("during a task, older tool results are cleared once the kept results pass t
   // and the result the model has not read yet stays whatever its size.
   const task = taskInProgress(10_800, 10_800, 10_800, 30_000);
   const seen = applyEdits(task.session, await calls.handlers["turn_end"](turnEnd(task), sessionContext([])));
-  assert.match(seen[2], /^\[read result, 10,807 characters, cleared from context to make room\. Run read again if more of it is needed\. It began:\]\nfile 0 /);
+  assert.match(seen[2], /^\[read result, 10,807 characters, cleared from context to make room; .*\]\nfile 0 /);
   assert.match(seen[4], /^\[read result, 10,807 characters, cleared/);
   assert.equal(seen[6].length, 10_807);
   assert.equal(seen[8].length, 30_007);
@@ -470,4 +470,40 @@ test("each request's reply limit is what the server's slot has left after the re
   const lfm3 = await calls.handlers["before_provider_request"](request("LiquidAI/LFM3-1.7B-GGUF:Q4_K_M", 1000, { max_tokens: 1 }), uiContext(true).ctx);
   assert.equal(lfm3.max_tokens, 4096);
   assert.equal(await calls.handlers["before_provider_request"](request("gemma", 1000, { max_tokens: 1 }), uiContext(true).ctx), undefined);
+});
+
+test("a cleared result keeps the lines that match its tool call and the request", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Research six facts and write research.md" }, uiContext(true).ctx);
+  // The real failure: the 90-minute line sat deep in a cleared search result, and the model then answered from memory.
+  const page = [...Array(60).fill("Whales are marine mammals found in every ocean."), "A sperm whale can spend around 90 minutes hunting underwater.", ...Array(60).fill("Other species vary widely.")].join("\n");
+  const { session } = realSession([
+    { role: "user", content: "Research six facts and write research.md" },
+    toolCall("c1", "web_search", { query: "sperm whale typical breath holding dive time" }),
+    toolResult("c1", "web_search", page),
+    answer("Done."),
+  ]);
+  const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
+  assert.match(seen[2], /A sperm whale can spend around 90 minutes hunting underwater\./);
+  assert.ok(seen[2].length <= 1200, `${seen[2].length} characters`);
+});
+
+test("once kept extracts pass their budget, the oldest cleared results shrink to a one-line note", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const messages: any[] = [{ role: "user", content: "Read every module and summarize it." }];
+  for (let i = 0; i < 30; i++) messages.push(toolCall(`c${i}`, "read", { path: `m${i}.py` }), toolResult(`c${i}`, "read", `module ${i}\n` + "def f():\n    return 1\n".repeat(400)));
+  messages.push(answer("Summary written."));
+  const { session } = realSession(messages);
+  const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
+  const results = seen.filter((text: string) => text.startsWith("[read result"));
+  assert.equal(results.length, 30);
+  const total = results.reduce((sum: number, text: string) => sum + text.length, 0);
+  assert.ok(total <= 12_000 + 30 * 120, `${total} characters`);
+  assert.match(results[29], /module 29/);
+  assert.doesNotMatch(results[0], /module 0/);
+  assert.match(results[0], /^\[read result, [\d,]+ characters, cleared from context\. Run read again if it is needed\.\]$/);
 });

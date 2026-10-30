@@ -55,9 +55,12 @@ const LFM3_MIN_CONTEXT = 8192;
 const RESULT_MAX_TOKENS = 8192;
 // Pi's system prompt and tool definitions are not in session entries; measured at about 2,700 tokens.
 const SYSTEM_ALLOWANCE = 4096;
-// Tool results at least this long leave future context once their question is answered, keeping their opening.
+// Tool results at least this long can leave context. A cleared result keeps an extract of CLEAR_KEEP_CHARS (its
+// opening and the lines matching its call and the request) while all extracts fit NOTE_BUDGET_CHARS, newest first;
+// older ones shrink to a one-line note.
 const CLEAR_MIN_CHARS = 2000;
-const CLEAR_KEEP_CHARS = 400;
+const CLEAR_KEEP_CHARS = 1000;
+const NOTE_BUDGET_CHARS = 12000;
 // Size of the digest of earlier requests, and how much of an older answer it keeps once that size is reached.
 const DIGEST_MAX_CHARS = 7000;
 const DIGEST_SHORT_ANSWER_CHARS = 200;
@@ -406,27 +409,50 @@ export default async function (pi: ExtensionAPI) {
   };
 
   /**
-   * Context edits that replace large tool results with a short note, newest first kept while their tokens fit
+   * Context edits that replace large tool results with notes, newest first kept in full while their tokens fit
    * `keepTokens`. Results in `unseen` (not yet read by the model) are always kept.
    */
   const clearResults = async (entries: readonly any[], keepTokens: number, unseen: ReadonlySet<string>, reason: string) => {
+    const callArgs = new Map<string, string>();
+    for (const projected of entries) {
+      for (const message of projected.messages as any[]) {
+        if (message?.role !== "assistant") continue;
+        for (const block of message.content ?? []) if (block.type === "toolCall") callArgs.set(block.id, JSON.stringify(block.arguments ?? {}));
+      }
+    }
     const edits = [];
     let kept = 0;
+    let noteChars = 0;
     for (const projected of [...entries].reverse()) {
       const message = projected.messages[0];
       if (projected.sourceEntry.type !== "message" || message?.role !== "toolResult") continue;
       const id = projected.sourceEntry.id;
+      const name = message.toolName;
       const text = textOf(message);
-      if (unseen.has(id) || text.length < CLEAR_MIN_CHARS || text.startsWith(`[${message.toolName} result, `)) continue;
+      if (unseen.has(id)) continue;
+      const note = text.match(new RegExp(`^\\[${name} result, ([\\d,]+) characters, cleared`));
+      const size = note ? note[1] : text.length.toLocaleString("en-US");
+      const bare = `[${name} result, ${size} characters, cleared from context. Run ${name} again if it is needed.]`;
+      if (note) {
+        // An earlier extract stays while the extracts fit their budget; past it, it shrinks to the one-line note.
+        if (text === bare) continue;
+        if (noteChars + text.length <= NOTE_BUDGET_CHARS) noteChars += text.length;
+        else edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content: bare } });
+        continue;
+      }
+      if (text.length < CLEAR_MIN_CHARS) continue;
       const tokens = keepTokens > 0 ? await seenResultTokens(id, text) : Infinity;
       if (kept + tokens <= keepTokens) {
         kept += tokens;
         continue;
       }
-      const note =
-        `[${message.toolName} result, ${text.length.toLocaleString("en-US")} characters, cleared from context ${reason}. ` +
-        `Run ${message.toolName} again if more of it is needed. It began:]\n${text.slice(0, CLEAR_KEEP_CHARS)}`;
-      edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content: note } });
+      const extract =
+        `[${name} result, ${size} characters, cleared from context ${reason}; its opening and the lines matching its ` +
+        `call and the request are kept. Run ${name} again for the rest.]\n` +
+        shortenText(text, `${callArgs.get(message.toolCallId) ?? ""} ${lastPrompt}`, CLEAR_KEEP_CHARS);
+      const content = noteChars + extract.length <= NOTE_BUDGET_CHARS ? extract : bare;
+      noteChars += content === extract ? extract.length : 0;
+      edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content } });
     }
     return edits;
   };
