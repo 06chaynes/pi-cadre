@@ -18,9 +18,9 @@
  * review, off otherwise. Every request gets short coding rules appended to the system message.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -66,19 +66,38 @@ const WRITE_TOOLS = new Set(["write", "edit"]);
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
 
-/** Follows symlinks in the longest existing prefix of an absolute path, so links cannot hide where a path leads. */
-function realPath(path: string): string {
-  let existing = path;
-  const rest: string[] = [];
-  while (!existsSync(existing) && dirname(existing) !== existing) {
-    rest.unshift(basename(existing));
-    existing = dirname(existing);
+const MAX_LINKS = 40;
+
+/**
+ * Resolves `path` against `cwd` the way the operating system does: one component at a time, following each symlink
+ * (even one whose target is missing) before applying any later "..". A symlink loop, or more than MAX_LINKS links,
+ * resolves to the filesystem root, which the guard always blocks.
+ */
+function physicalPath(path: string, cwd: string, links = { count: 0 }): string {
+  const absolute = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
+  const { root } = parse(absolute);
+  let current = root;
+  for (const part of absolute.slice(root.length).split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, part);
+    let isLink = false;
+    try {
+      isLink = lstatSync(next).isSymbolicLink();
+    } catch {
+      // A missing component is not a link; the rest of the path stays lexical.
+    }
+    if (!isLink) {
+      current = next;
+      continue;
+    }
+    if (++links.count > MAX_LINKS) return root;
+    current = physicalPath(readlinkSync(next), current, links);
   }
-  try {
-    return join(realpathSync(existing), ...rest);
-  } catch {
-    return path;
-  }
+  return current;
 }
 
 function isInside(path: string, root: string): boolean {
@@ -86,13 +105,11 @@ function isInside(path: string, root: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-/** Resolves a shell word that looks like a path, expanding ~, $HOME, and ${HOME}. Returns undefined for other words. */
-function shellPath(word: string, cwd: string, home: string): string | undefined {
+/** Returns a shell word that looks like a path with ~, $HOME, and ${HOME} expanded, or undefined for other words. */
+function shellPath(word: string, home: string): string | undefined {
   const expanded = word.replace(/^(~|\$\{HOME\}|\$HOME)(?=\/|$)/, home);
-  if (expanded !== word || expanded.startsWith("/") || expanded.startsWith(".") || expanded.includes("/")) {
-    return resolve(cwd, expanded);
-  }
-  return undefined;
+  const looksLikePath = expanded !== word || expanded.startsWith("/") || expanded.startsWith(".") || expanded.includes("/");
+  return looksLikePath ? expanded : undefined;
 }
 
 /**
@@ -101,17 +118,18 @@ function shellPath(word: string, cwd: string, home: string): string | undefined 
  * after following symlinks.
  */
 export function guardReason(toolName: string, input: Record<string, unknown>, cwd: string, home: string): string | undefined {
-  const realCwd = realPath(cwd);
-  const realHome = realPath(home);
-  const outsideReadArea = (path: string) => path === resolve("/") || (isInside(path, realHome) && !isInside(path, realCwd));
+  const realCwd = physicalPath(cwd, "/");
+  const realHome = physicalPath(home, "/");
+  const fsRoot = parse(realCwd).root;
+  const outsideReadArea = (path: string) => path === fsRoot || (isInside(path, realHome) && !isInside(path, realCwd));
   let paths: string[] = [];
   if (toolName === "bash" && typeof input.command === "string") {
-    paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, cwd, home) ?? []);
+    paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, home) ?? []);
   } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
-    paths = [resolve(cwd, input.path)];
+    paths = [input.path];
   }
   const outside = paths
-    .map(realPath)
+    .map((path) => physicalPath(path, realCwd))
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : outsideReadArea(path)));
   return outside === undefined
     ? undefined

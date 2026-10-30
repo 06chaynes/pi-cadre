@@ -158,3 +158,21 @@ test("the guard follows symlinks before deciding", async () => {
   assert.ok(guardReason("bash", { command: "cat linked/notes.txt" }, cwd, home));
   assert.equal(guardReason("write", { path: "new/dir/file.py" }, cwd, home), undefined);
 });
+
+test("the guard resolves dangling links and '..' after a link the way the OS does", async () => {
+  const { mkdtempSync, mkdirSync, symlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "cadre-home-"));
+  const cwd = join(home, "proj");
+  mkdirSync(join(cwd, "sub"), { recursive: true });
+  mkdirSync(join(home, "other", "deep"), { recursive: true });
+  symlinkSync(join(home, "missing", "target.py"), join(cwd, "dangling.py"));
+  symlinkSync(join(home, "other", "deep"), join(cwd, "linked"));
+  symlinkSync("loop", join(cwd, "loop"));
+  assert.ok(guardReason("write", { path: "dangling.py" }, cwd, home));
+  assert.ok(guardReason("write", { path: "linked/../escaped.py" }, cwd, home));
+  assert.ok(guardReason("bash", { command: "cat linked/../../secret" }, cwd, home));
+  assert.ok(guardReason("write", { path: "loop/x" }, cwd, home));
+  assert.equal(guardReason("write", { path: "sub/../ok.py" }, cwd, home), undefined);
+});
