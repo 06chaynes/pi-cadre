@@ -8,6 +8,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
+import { tmpdir } from "node:os";
 import { extname } from "node:path";
 
 const TIMEOUT_MS = 5000;
@@ -17,6 +18,9 @@ const MAX_ERROR_CHARS = 400;
 const CHECKERS: Record<string, string[]> = {
   ".py": [
     "python3",
+    // Isolated: the working directory, user site-packages, and PYTHON* variables stay off the import path, so a
+    // project's own ast.py (or similar) is never imported.
+    "-I",
     "-c",
     "import ast, sys\ntry: ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])\nexcept SyntaxError as e: sys.exit(f'SyntaxError: {e.msg} (line {e.lineno})')",
   ],
@@ -45,7 +49,8 @@ export function syntaxError(path: string): Promise<string | undefined> {
   if (!checker) return Promise.resolve(undefined);
   const [command, ...args] = checker;
   return new Promise((resolve) => {
-    execFile(command, [...args, path], { timeout: TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }, (error, _stdout, stderr) => {
+    // Run from a neutral directory: the project's files are only read as the checked file's contents.
+    execFile(command, [...args, path], { cwd: tmpdir(), timeout: TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }, (error, _stdout, stderr) => {
       if (!error || (error as NodeJS.ErrnoException).code === "ENOENT" || error.killed) return resolve(undefined);
       const lines = stderr.split("\n").filter((line) => line.trim() && !line.includes("node:internal"));
       resolve(lines.join("\n").slice(0, MAX_ERROR_CHARS) || `${command} could not parse the file`);

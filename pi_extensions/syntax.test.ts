@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -29,4 +29,20 @@ test("TypeScript, JavaScript, and Rust syntax errors are reported; valid files p
 
 test("files with no checker are not checked", async () => {
   assert.equal(await syntaxError(file("notes.md", "# not code {")), undefined);
+});
+
+test("a project's own ast.py is never imported by the Python check", async () => {
+  // Pi runs in the project directory; python3 -c would put it first on the import path.
+  const dir = mkdtempSync(join(tmpdir(), "cadre-hijack-"));
+  const marker = join(dir, "ran");
+  writeFileSync(join(dir, "ast.py"), `open(${JSON.stringify(marker)}, "w").write("x")\ndef parse(*a, **k): pass\n`);
+  writeFileSync(join(dir, "code.py"), "def f(:\n");
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    assert.match((await syntaxError(join(dir, "code.py"))) ?? "", /SyntaxError/);
+  } finally {
+    process.chdir(cwd);
+  }
+  assert.equal(existsSync(marker), false, "the planted ast.py ran");
 });
