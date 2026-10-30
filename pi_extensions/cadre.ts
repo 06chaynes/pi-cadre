@@ -18,8 +18,9 @@
  * review, off otherwise. Every request gets short coding rules appended to the system message.
  */
 
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -65,6 +66,21 @@ const WRITE_TOOLS = new Set(["write", "edit"]);
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
 
+/** Follows symlinks in the longest existing prefix of an absolute path, so links cannot hide where a path leads. */
+function realPath(path: string): string {
+  let existing = path;
+  const rest: string[] = [];
+  while (!existsSync(existing) && dirname(existing) !== existing) {
+    rest.unshift(basename(existing));
+    existing = dirname(existing);
+  }
+  try {
+    return join(realpathSync(existing), ...rest);
+  } catch {
+    return path;
+  }
+}
+
 function isInside(path: string, root: string): boolean {
   const rel = relative(root, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -81,17 +97,22 @@ function shellPath(word: string, cwd: string, home: string): string | undefined 
 
 /**
  * Returns why a tool call reaches outside the project at `cwd`, or undefined when it does not. Writes and edits must
- * stay inside `cwd`. Other paths may not be the filesystem root or inside `home` but outside `cwd`.
+ * stay inside `cwd`. Other paths may not be the filesystem root or inside `home` but outside `cwd`. Paths are compared
+ * after following symlinks.
  */
 export function guardReason(toolName: string, input: Record<string, unknown>, cwd: string, home: string): string | undefined {
-  const outsideReadArea = (path: string) => path === resolve("/") || (isInside(path, home) && !isInside(path, cwd));
+  const realCwd = realPath(cwd);
+  const realHome = realPath(home);
+  const outsideReadArea = (path: string) => path === resolve("/") || (isInside(path, realHome) && !isInside(path, realCwd));
   let paths: string[] = [];
   if (toolName === "bash" && typeof input.command === "string") {
     paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, cwd, home) ?? []);
   } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
     paths = [resolve(cwd, input.path)];
   }
-  const outside = paths.find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, cwd) : outsideReadArea(path)));
+  const outside = paths
+    .map(realPath)
+    .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : outsideReadArea(path)));
   return outside === undefined
     ? undefined
     : `${toolName} reaches ${outside}, outside the project ${cwd}. Work inside the project, or ask the user to run /cadre-guard off.`;

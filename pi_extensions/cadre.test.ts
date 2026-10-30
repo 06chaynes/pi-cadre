@@ -143,3 +143,18 @@ test("the tool_call hook blocks until /cadre-guard off", async () => {
   await calls.commands["cadre-guard"].handler("off", ctx);
   assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
 });
+
+test("the guard follows symlinks before deciding", async () => {
+  const { mkdtempSync, mkdirSync, symlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "cadre-home-"));
+  const cwd = join(home, "proj");
+  mkdirSync(cwd);
+  mkdirSync(join(home, "other"));
+  symlinkSync(join(home, "other"), join(cwd, "linked"));
+  assert.ok(guardReason("write", { path: "linked/new.py" }, cwd, home));
+  assert.ok(guardReason("read", { path: "linked" }, cwd, home));
+  assert.ok(guardReason("bash", { command: "cat linked/notes.txt" }, cwd, home));
+  assert.equal(guardReason("write", { path: "new/dir/file.py" }, cwd, home), undefined);
+});
