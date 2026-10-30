@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1]
+
+### Fixed
+
+- `cadre` kept a turn on LFM3 after a large tool result, and the next request exceeded LFM3's context (a 30k-token web search against a 16k slot). The router now estimates each request's size and sends it to Spark when it would not fit LFM3 with room for the reply. llama.cpp's context error did not trigger Pi's retry, so the retry path could not catch it.
+
 ## [0.2.0]
 
 ### Added

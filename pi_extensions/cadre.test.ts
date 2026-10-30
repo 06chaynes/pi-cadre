@@ -44,7 +44,7 @@ function fakePi() {
 /** Context with a UI whose confirm dialogs answer `answer`, recording their titles. */
 function uiContext(answer: boolean, model?: { provider: string; id: string }) {
   const asked: string[] = [];
-  const registry = { find: (provider: string, id: string) => ({ provider, id }) };
+  const registry = { find: (provider: string, id: string) => ({ provider, id, contextWindow: 16384, maxTokens: 4096 }) };
   const ctx = {
     cwd: process.cwd(),
     hasUI: true,
@@ -88,7 +88,7 @@ test("at startup with a UI, offers to switch to cadre when another model is sele
   const { ctx, asked } = uiContext(true, { provider: "ollama", id: "gemma" });
   await calls.handlers["session_start"]({ reason: "startup" }, ctx);
   assert.equal(asked.length, 1);
-  assert.deepEqual(calls.models, [{ provider: "llama-cpp", id: "cadre" }]);
+  assert.deepEqual(calls.models.map((m: any) => `${m.provider}/${m.id}`), ["llama-cpp/cadre"]);
 });
 
 test("does not prompt when a llama-cpp model is selected, or without a UI", async () => {
