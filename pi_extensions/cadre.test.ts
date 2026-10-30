@@ -510,15 +510,11 @@ test("once kept extracts pass their budget, the oldest cleared results shrink to
   assert.match(results[0], /^\[read result, [\d,]+ characters, cleared from context\. Facts you recorded with note stay in context; run read again if it is needed\.\]$/);
 });
 
-test("the note tool records a fact in the model's own context, where clearing never reaches it", async () => {
+test("the note tool is registered and says why it exists", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
-  const note = calls.tools["note"];
-  assert.ok(note, "note tool registered");
-  assert.match(note.description, /cleared/);
-  const result = await note.execute("c1", { fact: "A sperm whale can spend around 90 minutes underwater.", source: "https://www.nhm.ac.uk/x" }, undefined, undefined, {});
-  assert.equal(result.content[0].text, "Noted.");
+  assert.match(calls.tools["note"].description, /cleared/);
 });
 
 test("a cleared result's note points the model to its notes, and the rules say when to take them", async () => {
@@ -531,4 +527,43 @@ test("a cleared result's note points the model to its notes, and the rules say w
   const system = { role: "system", content: "Pi system prompt" };
   await calls.handlers["context_with_system"]({ messages: [system] });
   assert.match(system.content, /note/);
+});
+
+/** Context for a tool's execute with the session's branch. */
+const toolContext = (session: SessionManager) => ({ ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session });
+
+test("the note tool refuses a fact the session's tool results do not contain, including cleared ones", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const { session } = realSession([
+    { role: "user", content: "Research Everest's height." },
+    toolCall("c1", "web_search", { query: "everest 2020 survey" }),
+    toolResult("c1", "web_search", "The 2020 China-Nepal survey measured Mount Everest at 8,848.86 metres. " + "x".repeat(5000)),
+  ]);
+  applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
+  const note = calls.tools["note"];
+  const ok = await note.execute("n1", { topic: "Everest height", fact: "8,848.86 m (2020 China-Nepal survey)", source: "web_search everest 2020 survey" }, undefined, undefined, toolContext(session));
+  assert.equal(ok.content[0].text, "Noted.");
+  await assert.rejects(
+    note.execute("n2", { topic: "Everest height", fact: "8,848.86 m (7,749.21 m above sea level)", source: "web_search" }, undefined, undefined, toolContext(session)),
+    /Not noted: 7,749\.21 is not in any tool result in this session/,
+  );
+});
+
+test("a later note on the same topic marks the earlier one superseded", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const noteCall = (id: string, fact: string) => ({ ...toolCall(id, "note", { topic: "Tokyo population", fact, source: "web_search" }) });
+  const { session } = realSession([
+    { role: "user", content: "Research Tokyo." },
+    noteCall("n1", "Tokyo metropolis: 14,192,184"),
+    toolResult("n1", "note", "Noted."),
+    noteCall("n2", "Tokyo metropolis 14,192,184; 23 wards 9,873,999"),
+    toolResult("n2", "note", "Noted."),
+  ]);
+  const seen = applyEdits(session, await calls.handlers["turn_end"](boundary(session, { type: "turn_end", toolResultEntryIds: [] }), sessionContext([])));
+  assert.equal(seen[2], "Superseded by a later note on Tokyo population.");
+  assert.equal(seen[4], "Noted.");
 });
