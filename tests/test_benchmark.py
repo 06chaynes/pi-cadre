@@ -2,10 +2,12 @@ import textwrap
 
 import pytest
 
-from benchmark_tasks import SWE_BENCH_INSTANCES, TASKS
+import benchmark_tasks
+from benchmark_tasks import SWE_BENCH_INSTANCES, TASKS, control_failures, scout_schema
+from llama_cpp_client import syntax_error
 from repo_benchmark import reindent, strip_inner_imports
 from repo_indexer import RepoASTIndexer
-from run_full_battery_eval import snippet_parses
+from run_full_battery_eval import snippet_window
 
 MODULE = textwrap.dedent('''
     import os
@@ -69,10 +71,45 @@ def test_strip_inner_imports():
     assert strip_inner_imports("def (") == "def ("
 
 
-def test_snippet_parses():
-    assert snippet_parses("return x")
-    assert snippet_parses("    y = 1")
-    assert not snippet_parses("def (")
+def test_snippet_window_dedents_and_drops_comments():
+    assert snippet_window("\n        # note\n        if a:\n            b\n") == "if a:\n    b"
+
+
+def test_swe_snippets_parse():
+    for inst in SWE_BENCH_INSTANCES:
+        assert syntax_error(snippet_window(inst["code_context"])) is None, inst["instance_id"]
+
+
+@pytest.fixture
+def fake_repo(monkeypatch):
+    """Stubs the repo helpers. `state` holds whether the defect is injected; `checks` maps that state to the check result."""
+    repo = type("Repo", (), {"injected": False, "checks": {False: True, True: False}})
+    monkeypatch.setattr(benchmark_tasks, "reset_repo", lambda: setattr(repo, "injected", False))
+    monkeypatch.setattr(benchmark_tasks, "inject_defect", lambda task: setattr(repo, "injected", True))
+    monkeypatch.setattr(benchmark_tasks, "verify", lambda task: (repo.checks[repo.injected], "No module named pytest"))
+    return repo
+
+
+def test_control_failures_accepts_working_checks(fake_repo):
+    assert control_failures(TASKS) == []
+
+
+def test_control_failures_reports_broken_environment(fake_repo):
+    fake_repo.checks = {False: False, True: False}
+    failures = control_failures(TASKS[:1])
+    assert failures == ["TASK-1: check fails on the clean repo: No module named pytest"]
+
+
+def test_control_failures_reports_check_blind_to_defect(fake_repo):
+    fake_repo.checks = {False: True, True: True}
+    assert control_failures(TASKS[:1]) == ["TASK-1: check passes with the defect injected"]
+
+
+def test_scout_schema_limits_answers_to_candidates():
+    schema = scout_schema([{"file": "a.py", "function": "f"}, {"file": "b.py", "function": "g"}, {"file": "a.py", "function": "g"}])
+    assert schema["properties"]["target_file"]["enum"] == ["a.py", "b.py"]
+    assert schema["properties"]["target_function"]["enum"] == ["f", "g"]
+    assert schema["required"] == ["target_file", "target_function"]
 
 
 def test_task_data_is_complete():

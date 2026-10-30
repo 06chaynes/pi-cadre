@@ -74,7 +74,8 @@ Pi commands added by the extension:
 
 - `AutoThinkingPolicy`: turns thinking off for code and JSON-schema output, and on for diagnosis, planning, and retries after a test failure.
 - `AutoModelPolicy`: sends short patching and scouting tasks to LFM3 and everything else to Spark. In `auto` mode the client falls back to whichever server is running.
-- `LlamaCppClient.generate_code`: Spark gets a chat request. LFM3 gets a ChatML prompt whose assistant turn is pre-filled with a code fence and the function signature.
+- `LlamaCppClient.generate_code`: Spark gets its chat template through `/completion`. LFM3 gets a ChatML prompt whose assistant turn is pre-filled with a code fence and the function signature. When the code does not parse, the client regenerates from the token at the parse error using that token's top alternatives. This fixes confident mistakes such as the merged `):` token closing a multi-line condition early.
+- `LlamaCppClient.chat_json`: appends the schema's field names to the prompt, so the JSON grammar never forces fields the model was not asked for.
 
 ## Tests
 
@@ -93,6 +94,8 @@ pip install -r requests_repo/requirements-dev.txt -e requests_repo
 python3 run_full_battery_eval.py [--model auto|spark|lfm3]
 python3 benchmark_parallel_slots.py [--port 8081]
 ```
+
+Run the battery with the interpreter that has the `requests` dev requirements (for example `.venv/bin/python`). Before calling a model it checks that each task's test passes on the clean repo and fails with the defect injected, and exits if not.
 
 The battery runs two suites:
 

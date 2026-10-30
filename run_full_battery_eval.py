@@ -9,15 +9,14 @@ Usage: python3 run_full_battery_eval.py [--model auto|spark|lfm3]
 """
 
 import argparse
-import ast
 import json
 import sys
 import textwrap
 import time
 from pathlib import Path
 
-from benchmark_tasks import REPO_DIR, SWE_BENCH_INSTANCES, TASKS
-from llama_cpp_client import MODELS, LlamaCppClient
+from benchmark_tasks import REPO_DIR, SWE_BENCH_INSTANCES, TASKS, control_failures
+from llama_cpp_client import MODELS, LlamaCppClient, syntax_error
 from repo_benchmark import RepoBenchmarkRunner
 
 SWE_PROMPT = (
@@ -50,16 +49,10 @@ def repo_suite(client):
     return summarize("B: psf/requests", [runner.run(task) for task in TASKS], t0)
 
 
-def snippet_parses(code):
-    """True if code parses at module level or as a function body."""
-    code = textwrap.dedent(code).strip()
-    for candidate in (code, "def _wrapper():\n" + textwrap.indent(code, "    ")):
-        try:
-            ast.parse(candidate)
-            return True
-        except SyntaxError:
-            pass
-    return False
+def snippet_window(code_context):
+    """Snippet source with comment lines removed and common indentation stripped."""
+    lines = [l for l in code_context.splitlines() if not l.strip().startswith("#")]
+    return textwrap.dedent("\n".join(lines)).strip("\n")
 
 
 def swe_suite(client):
@@ -69,18 +62,17 @@ def swe_suite(client):
     instruction = "Fix the bug and output strictly the corrected code snippet inside a ```python ``` block."
     results = []
     for inst in SWE_BENCH_INSTANCES:
-        code_lines = [l for l in inst["code_context"].strip().splitlines() if not l.strip().startswith("#")]
-        snippet = textwrap.dedent("\n".join(code_lines))
+        snippet = snippet_window(inst["code_context"])
         first = snippet.splitlines()[0].strip()
         prefill = first if first.startswith(("def ", "class ")) else ""
         user = f"[BUG SPECIFICATION]:\n{inst['problem_summary']}\n\n[SOURCE CODE WINDOW]:\n```python\n{snippet}\n```"
 
         code, res = client.generate_code(model, SWE_PROMPT, user, instruction, prefill, max_tokens=350)
         keyword = inst["ground_truth_fix_keyword"] in code
-        parses = snippet_parses("\n".join(l for l in code.splitlines() if not l.strip().startswith("#")))
+        parses = syntax_error(snippet_window(code)) is None
         passed = keyword and parses
         print(f" [{'PASS' if passed else 'FAIL'}] {inst['instance_id']:<28} keyword={keyword} parses={parses} "
-              f"({res['tokens']} tokens, {res['elapsed_sec']}s)")
+              f"({res['tokens']} tokens, {res['elapsed_sec']}s)" + (f" syntax repaired {res['repair']}" if res["repaired"] else ""))
         results.append({"instance_id": inst["instance_id"], "passed": passed, "keyword_match": keyword, "ast_valid": parses})
     return summarize("C: SWE-bench Lite", results, t0)
 
@@ -95,6 +87,10 @@ def main():
         sys.exit("No llama-server is reachable for this mode. Start one with launchers/start_llama_server.sh.")
     if not (REPO_DIR / ".git").exists():
         sys.exit(f"Missing {REPO_DIR}. See README.md for the clone command.")
+    failures = control_failures(TASKS)
+    if failures:
+        sys.exit("Task checks do not behave as expected with this interpreter (" + sys.executable + "):\n  "
+                 + "\n  ".join(failures) + "\nRun with the Python that has requests_repo's dev requirements installed.")
     print(f"Model mode: {mode}. Online: {', '.join(online)}")
 
     client = LlamaCppClient(model_mode=mode)

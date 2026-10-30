@@ -79,15 +79,17 @@ TASKS = [
     },
 ]
 
-SCOUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "target_file": {"type": "string"},
-        "target_function": {"type": "string"},
-        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-    },
-    "required": ["target_file", "target_function", "confidence"],
-}
+
+def scout_schema(candidates):
+    """JSON schema for the scout's answer, limited to the files and functions in candidates."""
+    return {
+        "type": "object",
+        "properties": {
+            "target_file": {"type": "string", "enum": sorted({c["file"] for c in candidates})},
+            "target_function": {"type": "string", "enum": sorted({c["function"] for c in candidates})},
+        },
+        "required": ["target_file", "target_function"],
+    }
 
 
 def reset_repo():
@@ -106,6 +108,25 @@ def verify(task):
     """Runs the task's check in REPO_DIR. Returns (passed, output)."""
     res = subprocess.run([sys.executable, *task["check"]], capture_output=True, text=True, cwd=REPO_DIR)
     return res.returncode == 0, res.stdout + res.stderr
+
+
+def control_failures(tasks):
+    """
+    Runs each task's check on the clean repo, where it must pass, and with the defect injected, where it must fail.
+    Returns one message per violation. A non-empty result means scores would reflect the environment, not the model.
+    """
+    failures = []
+    for task in tasks:
+        reset_repo()
+        passed, output = verify(task)
+        if not passed:
+            last = (output.strip().splitlines() or [""])[-1]
+            failures.append(f"{task['id']}: check fails on the clean repo: {last}")
+        inject_defect(task)
+        if verify(task)[0]:
+            failures.append(f"{task['id']}: check passes with the defect injected")
+    reset_repo()
+    return failures
 
 
 SWE_BENCH_INSTANCES = [
