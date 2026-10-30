@@ -64,6 +64,9 @@ const SYSTEM_ALLOWANCE = 4096;
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
 const EXTRACT_BUDGET_CHARS = 12000;
+// descry tools kept active with the "descry" option: find a symbol, its context, its callers, and call flow.
+const DESCRY_TOOLS = new Set(["descry_search", "descry_quick", "descry_context", "descry_callers", "descry_flow"]);
+
 // Most characters of the project file map in the system message (see projectmap.ts).
 const MAP_MAX_CHARS = 2000;
 
@@ -247,6 +250,11 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     pruneOriginals(resultsDir(), Date.now());
+    // EXPERIMENT: "descry" keeps only descry's navigation tools when its extension is installed (fewer tool
+    // definitions for small models to read and choose among).
+    if (OPTS.has("descry") && pi.getAllTools().some((tool) => tool.name.startsWith("descry_"))) {
+      pi.setActiveTools(pi.getActiveTools().filter((name) => !name.startsWith("descry_") || DESCRY_TOOLS.has(name)));
+    }
     if (event.reason !== "startup" || !ctx.hasUI) return;
     contexts = await probeContexts();
     register();
@@ -396,6 +404,7 @@ export default async function (pi: ExtensionAPI) {
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
   //   map       the system message lists the project's files (see projectmap.ts)
   //   firstsmall each request starts on the second model; continuations go to Spark
+  //   descry    only descry's navigation tools stay active when its extension is installed
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
