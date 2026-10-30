@@ -83,5 +83,6 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
   return outside === undefined
     ? undefined
-    : `${toolName} reaches ${outside}, outside the project ${cwd}. Work inside the project, or ask the user to run /cadre-guard off.`;
+    : `${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
+        "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
 }

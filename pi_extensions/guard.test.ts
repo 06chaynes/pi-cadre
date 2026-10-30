@@ -101,3 +101,9 @@ test("compares paths in on-disk case on case-insensitive file systems", (t) => {
   assert.ok(guardReason("bash", { command: `ls ${join(base, "other").toUpperCase()}` }, cwd, base));
   assert.equal(guardReason("write", { path: join(base, "proj", "x.py") }, cwd, base), undefined);
 });
+
+test("a block says the way forward: project paths, and web_search for information from the web", () => {
+  const reason = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me")!;
+  assert.match(reason, /Paths inside the project work: relative paths start at \/work\/inv\./);
+  assert.match(reason, /For information from the web, use web_search\./);
+});
