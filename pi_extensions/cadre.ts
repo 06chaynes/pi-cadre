@@ -33,7 +33,7 @@ import { guardReason } from "./guard.ts";
 import { isResearchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
-import { shortenText, unseenNote } from "./unseen.ts";
+import { shortenSearch, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
   type ServerKey,
@@ -76,6 +76,16 @@ const KEPT_RESULTS_MAX_TOKENS = 16384;
 // Chat template tokens added around each message, which /tokenize of the joined text does not include.
 const TEMPLATE_TOKENS_PER_MESSAGE = 8;
 const MAX_SHORTEN_ROUNDS = 4;
+// No text runs more than this many characters per token, so a result longer than this many times its budget is cut by
+// length before it is counted (a 2.3 MB search result is not sent whole to two tokenizers).
+const MAX_CHARS_PER_TOKEN = 6;
+// How to see the rest of a shortened result, by tool.
+const MORE: Record<string, string> = {
+  read: "Read again with offset and limit to see other parts.",
+  bash: "Run a narrower command (grep, head, tail, sed -n) to see other parts.",
+  web_fetch: "Fetch a more specific page, or search for the part you need.",
+};
+const MORE_DEFAULT = "Call the tool again with a narrower request to see other parts.";
 // Tokens left free in a slot beyond the prompt and reply limit.
 const SLOT_MARGIN_TOKENS = 64;
 // Private to the user; a shared temporary directory would let another user redirect the logs.
@@ -326,16 +336,23 @@ export default async function (pi: ExtensionAPI) {
     let content = note === undefined ? event.content : [...event.content, { type: "text" as const, text: note }];
     const text = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
     const budget = Math.min(RESULT_MAX_TOKENS, Math.floor(resultRoom() / pendingCalls));
-    let tokens = await resultTokens(text);
-    if (tokens > budget) {
-      // Shorten in proportion to the measured overshoot, then measure again; dense text can need a second round.
-      let short = text;
-      for (let round = 0; round < MAX_SHORTEN_ROUNDS && tokens > budget; round++) {
-        short = shortenText(text, lastPrompt, Math.floor(short.length * (budget / tokens) * 0.95));
-        tokens = await resultTokens(short);
-      }
-      content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
+    // Shortening ranks against the call (its query, path, or command) as well as the request.
+    const query = `${JSON.stringify(event.input ?? {})} ${lastPrompt}`;
+    const shorten = (chars: number) =>
+      (event.toolName === "web_search" ? shortenSearch(text, query, chars) : undefined) ??
+      shortenText(text, query, chars, MORE[event.toolName] ?? MORE_DEFAULT);
+    let short = text;
+    let tokens = text.length > budget * MAX_CHARS_PER_TOKEN ? Infinity : await resultTokens(text);
+    if (tokens === Infinity) {
+      short = shorten(budget * 2);
+      tokens = await resultTokens(short);
     }
+    // Shorten in proportion to the measured overshoot, then measure again; dense text can need a second round.
+    for (let round = 0; round < MAX_SHORTEN_ROUNDS && tokens > budget; round++) {
+      short = shorten(Math.floor(short.length * (budget / tokens) * 0.95));
+      tokens = await resultTokens(short);
+    }
+    if (short !== text) content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
     return content === event.content ? undefined : { content };
   });
 

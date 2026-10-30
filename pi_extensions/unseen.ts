@@ -13,7 +13,8 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
-import { keywords } from "./text.ts";
+import { passages } from "./memory.ts";
+import { bm25, keywords } from "./text.ts";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_MATCHES = 20;
@@ -65,9 +66,10 @@ export function unseenNote(
 
 /**
  * `text` cut to at most `maxChars`: the first lines up to half the limit, then the other lines that contain words from
- * `prompt`, with line numbers, and a note saying what was left out. Text within the limit is returned unchanged.
+ * `prompt`, with line numbers, and a note saying what was left out and `more` (how to see the rest). Text within the
+ * limit is returned unchanged.
  */
-export function shortenText(text: string, prompt: string, maxChars: number): string {
+export function shortenText(text: string, prompt: string, maxChars: number, more = ""): string {
   if (text.length <= maxChars) return text;
   const lines = text.split("\n");
   let head = 0;
@@ -81,7 +83,7 @@ export function shortenText(text: string, prompt: string, maxChars: number): str
     head = 1;
   }
   const words = keywords(prompt);
-  const note = `[Result shortened from ${text.length} to fit the context window. Lines 1-${head} are above; below are the other lines that contain words from the request (${words.join(", ") || "none"}).]`;
+  const note = `[Result shortened from ${text.length} to fit the context window. Lines 1-${head} are above; below are the other lines that contain words from the request (${words.join(", ") || "none"}).${more ? ` ${more}` : ""}]`;
   let budget = maxChars - used - note.length - 2;
   const kept: { i: number; text: string }[] = [];
   for (const match of matchingLines(lines, words, (i) => i >= head, Number.MAX_SAFE_INTEGER)) {
@@ -113,3 +115,44 @@ function matchingLines(lines: string[], words: string[], include: (i: number) =>
 
 const numbered = (matches: { i: number; text: string }[]) =>
   matches.map((m) => `${m.i + 1}: ${m.text.slice(0, MAX_LINE_CHARS)}`).join("\n");
+
+// A search hit as @ollama/pi-web-search writes it: "N. Title", then an indented "URL: ..." line, then the hit's text.
+const SEARCH_HIT = /^(\d+)\. (.*)\n\s+URL: (\S+)/gm;
+const TITLE_CHARS = 150;
+const SEARCH_PASSAGE_CHARS = 500;
+
+/**
+ * A web search result cut to at most `maxChars` by its structure: a note, then every hit's title and URL, each followed
+ * by its passages that best match `query` (BM25), the best passage of each hit first and then the best of the rest.
+ * Undefined when `text` is not a list of two or more hits (shortenText handles it).
+ */
+export function shortenSearch(text: string, query: string, maxChars: number): string | undefined {
+  const heads = [...text.matchAll(SEARCH_HIT)];
+  if (heads.length < 2) return undefined;
+  const hits = heads.map((m, i) => ({
+    header: `${m[1]}. ${m[2].slice(0, TITLE_CHARS)}\n   URL: ${m[3]}`,
+    body: text.slice(m.index! + m[0].length, i + 1 < heads.length ? heads[i + 1].index : text.length),
+  }));
+  const note = `[web_search result shortened from ${text.length.toLocaleString("en-US")} characters: every hit's title and URL, then the passages that best match the search. web_fetch a URL for its full text.]`;
+  let room = maxChars - note.length - hits.reduce((sum, h) => sum + h.header.length + 2, 0);
+  const all = hits.flatMap((h, hit) => passages({ source: "", text: h.body }, SEARCH_PASSAGE_CHARS).map((p) => ({ hit, text: p.text })));
+  const scores = all.length ? bm25(all.map((p) => p.text)).score(query) : [];
+  const order = all.map((_, i) => i).filter((i) => scores[i].matched > 0).sort((a, b) => scores[b].score - scores[a].score);
+  const chosen = new Set<number>();
+  const take = (i: number) => {
+    if (room < all[i].text.length + 1) return;
+    chosen.add(i);
+    room -= all[i].text.length + 1;
+  };
+  for (let hit = 0; hit < hits.length; hit++) {
+    const best = order.find((i) => all[i].hit === hit);
+    if (best !== undefined) take(best);
+  }
+  for (const i of order) if (!chosen.has(i)) take(i);
+  const out = [note];
+  hits.forEach((h, hit) => {
+    out.push(h.header);
+    all.forEach((p, i) => chosen.has(i) && p.hit === hit && out.push(p.text));
+  });
+  return out.join("\n").slice(0, maxChars);
+}

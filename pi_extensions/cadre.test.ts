@@ -616,3 +616,27 @@ test("with think, auto thinking defaults to low and uses high for reasoning prom
     else process.env.CADRE_OPTS = saved;
   }
 });
+
+test("an oversized search result keeps every hit, a cut read says how to see more, and huge text is cut before counting", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const served = globalThis.fetch;
+  let largestCounted = 0;
+  globalThis.fetch = (async (url: string, init?: any) => {
+    if (String(url).endsWith("/tokenize")) largestCounted = Math.max(largestCounted, JSON.parse(init.body).content.length);
+    return served(url, init);
+  }) as typeof fetch;
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "What are the latest research results in the field of ML" }, uiContext(true).ctx);
+  const hit = (n: number, url: string) => `${n}. Hit ${n}\n   URL: ${url}\n   ` + Array.from({ length: 30000 }, (_, i) => `line ${i} about ML research results`).join("\n");
+  const search = [hit(1, "https://a.example/1"), hit(2, "https://b.example/2"), hit(3, "https://c.example/3")].join("\n\n");
+  const event = { toolName: "web_search", toolCallId: "s1", input: { query: "latest ML research" }, content: [{ type: "text", text: search }], details: {} };
+  const result = await calls.handlers["tool_result"](event, { cwd: process.cwd() });
+  const text = result.content.map((c: any) => c.text).join("");
+  for (const url of ["https://a.example/1", "https://b.example/2", "https://c.example/3"]) assert.ok(text.includes(url), url);
+  assert.ok(search.length > 2_000_000 && largestCounted < 200_000, `${largestCounted} characters sent to /tokenize`);
+
+  const file = { toolName: "read", toolCallId: "r1", input: { path: "big.txt" }, content: [{ type: "text", text: "word\n".repeat(60_000) }], details: {} };
+  const read = await calls.handlers["tool_result"](file, { cwd: process.cwd() });
+  assert.match(read.content.map((c: any) => c.text).join(""), /Read again with offset and limit to see other parts\./);
+});

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { readLinesCapped, shortenText, unseenNote } from "./unseen.ts";
+import { readLinesCapped, shortenSearch, shortenText, unseenNote } from "./unseen.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -87,4 +87,28 @@ test("shortenText leaves text within the limit unchanged and cuts one long line 
   assert.equal(shortenText("short", "anything", 100), "short");
   const long = shortenText("x".repeat(10_000), "anything", 1_000);
   assert.ok(long.length <= 1_000 && long.startsWith("xxx"));
+});
+
+/** A web_search result in the format of @ollama/pi-web-search: numbered hits, each with a URL line and its text. */
+function searchHits(hits: { title: string; url: string; body: string }[]) {
+  return hits.map((h, i) => `${i + 1}. ${h.title}\n   URL: ${h.url}\n   ${h.body}`).join("\n\n");
+}
+
+test("a shortened search result keeps every hit's title and URL and the passages that best match the search", () => {
+  const filler = (word: string) => Array.from({ length: 4000 }, (_, i) => `${word} entry ${i} of a long index page.`).join("\n");
+  const text = searchHits([
+    { title: "Proceedings of Machine Learning Research", url: "https://proceedings.mlr.press/v267/", body: filler("Paper") },
+    { title: "State of AI Report 2025", url: "https://www.stateof.ai/2025", body: filler("Slide") },
+    { title: "Nature Machine Intelligence", url: "https://www.nature.com/natmachintell/", body: filler("Article") },
+    { title: "arXiv cs.LG recent", url: "https://arxiv.org/list/cs.LG/recent", body: filler("Listing") + "\n\nThe latest ML results: reasoning models now lead the benchmark, per the 2026 survey.\n\n" + filler("Listing") },
+  ]);
+  const short = shortenSearch(text, '{"query":"latest ML research results"} What are the latest research results in the field of ML', 3000);
+  assert.ok(short !== undefined && short.length <= 3000, `${short?.length} characters`);
+  for (const url of ["proceedings.mlr.press/v267", "stateof.ai/2025", "nature.com/natmachintell", "arxiv.org/list/cs.LG/recent"]) assert.ok(short.includes(url), url);
+  assert.match(short, /The latest ML results: reasoning models now lead the benchmark/);
+  assert.match(short, /^\[web_search result shortened from [\d,]+ characters: every hit's title and URL, then the passages that best match the search\. web_fetch a URL for its full text\.\]/);
+});
+
+test("text that is not a list of search hits is left to shortenText", () => {
+  assert.equal(shortenSearch("x".repeat(10_000), "query", 3000), undefined);
 });
