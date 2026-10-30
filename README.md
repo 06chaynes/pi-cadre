@@ -76,6 +76,7 @@ Pi commands added by the extension:
 
 - `/cadre-status`: health, model file, and per-slot context of both servers.
 - `/cadre-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, diagnosis, debugging, investigation, or review run with medium thinking, and all others run with thinking off.
+- `/cadre-guard on|off`: path guard, on by default. Blocks writes and edits outside the working directory, and reads, searches, and bash commands that reach `/` or your home directory outside the working directory. Bash commands are checked by the paths written in them, so it catches mistakes rather than acting as a sandbox.
 
 ## Python client
 
@@ -133,21 +134,3 @@ Each task description in B and C states the fix. C passes when that exact text a
 ## License
 
 MIT
-
-## Releases
-
-The npm package contains only the Pi extension (`files` in `package.json`). Releases are staged by CI and go live only after a maintainer approves them with 2FA.
-
-1. Bump `version` in `package.json` and move the `Unreleased` notes in `CHANGELOG.md` under the new version.
-2. Push a `vX.Y.Z` tag. `.github/workflows/release.yml` checks that the tag matches `package.json`, runs the extension tests, packs, and runs `npm stage publish` through trusted publishing (OIDC, no token secret).
-3. Review and approve: `npm stage list pi-cadre`, `npm stage download <stage-id>` to inspect the tarball, then `npm stage approve <stage-id>` (or approve on npmjs.com). Both ask for 2FA.
-
-Run the workflow manually with target `dry-run` to check the package without publishing.
-
-One-time setup, after the first version exists on npm:
-
-```bash
-npm trust github pi-cadre --file release.yml --repo 06chaynes/pi-cadre --env npm --allow-stage-publish
-```
-
-Then set the package's publishing access on npmjs.com to "Require two-factor authentication and disallow tokens".

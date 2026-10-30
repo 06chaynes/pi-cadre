@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import extension, { modelConfigs } from "./cadre.ts";
+import extension, { guardReason, modelConfigs } from "./cadre.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -21,10 +21,15 @@ function serveProps(contexts: Record<number, number>) {
 
 /** Minimal ExtensionAPI stand-in that records registrations and thinking changes. */
 function fakePi() {
-  const calls = { providers: {} as Record<string, any>, handlers: {} as Record<string, Function>, thinking: [] as string[] };
+  const calls = {
+    providers: {} as Record<string, any>,
+    commands: {} as Record<string, any>,
+    handlers: {} as Record<string, Function>,
+    thinking: [] as string[],
+  };
   const pi = {
     registerProvider: (name: string, config: unknown) => (calls.providers[name] = config),
-    registerCommand: () => {},
+    registerCommand: (name: string, command: unknown) => (calls.commands[name] = command),
     on: (event: string, handler: Function) => (calls.handlers[event] = handler),
     setThinkingLevel: (level: string) => calls.thinking.push(level),
   };
@@ -78,4 +83,113 @@ test("auto thinking turns on for review and diagnosis prompts only", async () =>
     await calls.handlers["before_agent_start"]({ prompt });
   }
   assert.deepEqual(calls.thinking, ["medium", "medium", "off"]);
+});
+
+const HOME = "/home/u";
+const CWD = "/home/u/proj";
+const guard = (toolName: string, input: Record<string, unknown>) => guardReason(toolName, input, CWD, HOME);
+
+test("the guard blocks the commands an agent ran outside its project", () => {
+  for (const command of [
+    "cd /home/u/Documents/lfm-test && ls",
+    'grep -rln "commit_ships" /home/u --include=*.py',
+    "find / -name test_store.py 2>/dev/null",
+    "ls ~/.ssh",
+    "cat $HOME/.npmrc",
+    "cat ${HOME}/.npmrc",
+    "ls ../other",
+  ]) {
+    assert.ok(guard("bash", { command }), command);
+  }
+});
+
+test("the guard allows project, system, and plain commands", () => {
+  for (const command of [
+    "python3 -m pytest -q",
+    "cd /home/u/proj/tests && ls",
+    "ls sub/dir ./x",
+    "cat /etc/hosts /usr/lib/os-release",
+    "curl -s http://127.0.0.1:8080/health",
+    "git diff -- a/b",
+  ]) {
+    assert.equal(guard("bash", { command }), undefined, command);
+  }
+});
+
+test("writes and edits must stay inside the project", () => {
+  assert.equal(guard("write", { path: "src/a.py" }), undefined);
+  assert.equal(guard("edit", { path: "/home/u/proj/a.py" }), undefined);
+  assert.ok(guard("write", { path: "/tmp/a.py" }));
+  assert.ok(guard("edit", { path: "../other/a.py" }));
+});
+
+test("reads and searches may use system paths but not the rest of home", () => {
+  assert.equal(guard("read", { path: "/etc/hosts" }), undefined);
+  assert.equal(guard("ls", {}), undefined);
+  assert.equal(guard("grep", { pattern: "x", path: "tests" }), undefined);
+  assert.ok(guard("read", { path: "/home/u/.ssh/id_ed25519" }));
+  assert.ok(guard("find", { pattern: "*.py", path: "/" }));
+});
+
+test("the tool_call hook blocks until /cadre-guard off", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const ctx = { cwd: process.cwd(), ui: { notify: () => {} } };
+  const call = { toolName: "bash", input: { command: "find / -name x" } };
+  const blocked = await calls.handlers["tool_call"](call, ctx);
+  assert.equal(blocked.block, true);
+  assert.match(blocked.reason, /outside the project/);
+  await calls.commands["cadre-guard"].handler("off", ctx);
+  assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
+});
+
+test("the guard follows symlinks before deciding", async () => {
+  const { mkdtempSync, mkdirSync, symlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "cadre-home-"));
+  const cwd = join(home, "proj");
+  mkdirSync(cwd);
+  mkdirSync(join(home, "other"));
+  symlinkSync(join(home, "other"), join(cwd, "linked"));
+  assert.ok(guardReason("write", { path: "linked/new.py" }, cwd, home));
+  assert.ok(guardReason("read", { path: "linked" }, cwd, home));
+  assert.ok(guardReason("bash", { command: "cat linked/notes.txt" }, cwd, home));
+  assert.equal(guardReason("write", { path: "new/dir/file.py" }, cwd, home), undefined);
+});
+
+test("the guard resolves dangling links and '..' after a link the way the OS does", async () => {
+  const { mkdtempSync, mkdirSync, symlinkSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "cadre-home-"));
+  const cwd = join(home, "proj");
+  mkdirSync(join(cwd, "sub"), { recursive: true });
+  mkdirSync(join(home, "other", "deep"), { recursive: true });
+  symlinkSync(join(home, "missing", "target.py"), join(cwd, "dangling.py"));
+  symlinkSync(join(home, "other", "deep"), join(cwd, "linked"));
+  symlinkSync("loop", join(cwd, "loop"));
+  assert.ok(guardReason("write", { path: "dangling.py" }, cwd, home));
+  assert.ok(guardReason("write", { path: "linked/../escaped.py" }, cwd, home));
+  assert.ok(guardReason("bash", { command: "cat linked/../../secret" }, cwd, home));
+  assert.ok(guardReason("write", { path: "loop/x" }, cwd, home));
+  assert.equal(guardReason("write", { path: "sub/../ok.py" }, cwd, home), undefined);
+});
+
+test("the guard compares paths in on-disk case on case-insensitive file systems", async (t) => {
+  const { existsSync, mkdtempSync, mkdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = mkdtempSync(join(tmpdir(), "cadre-Home-"));
+  const cwd = join(home, "Proj");
+  mkdirSync(cwd);
+  mkdirSync(join(home, "Other"));
+  if (!existsSync(cwd.toLowerCase())) {
+    t.skip("file system is case-sensitive");
+    return;
+  }
+  assert.ok(guardReason("read", { path: join(home, "Other").toLowerCase() }, cwd, home));
+  assert.ok(guardReason("bash", { command: `ls ${join(home, "other").toUpperCase()}` }, cwd, home));
+  assert.equal(guardReason("write", { path: join(home, "proj", "x.py") }, cwd, home), undefined);
 });
