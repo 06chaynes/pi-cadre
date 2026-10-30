@@ -79,6 +79,8 @@ const MAX_SHORTEN_ROUNDS = 4;
 // No text runs more than this many characters per token, so a result longer than this many times its budget is cut by
 // length before it is counted (a 2.3 MB search result is not sent whole to two tokenizers).
 const MAX_CHARS_PER_TOKEN = 6;
+// Most hits one web_search returns (the default of @ollama/pi-web-search).
+const SEARCH_MAX_RESULTS = 5;
 // How to see the rest of a shortened result, by tool.
 const MORE: Record<string, string> = {
   read: "Read again with offset and limit to see other parts.",
@@ -307,6 +309,11 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    // More search hits mean more of each to cut away; the tool's own default is enough for a step.
+    const input = event.input as Record<string, unknown>;
+    if (event.toolName === "web_search" && typeof input.max_results === "number" && input.max_results > SEARCH_MAX_RESULTS) {
+      input.max_results = SEARCH_MAX_RESULTS;
+    }
     if (!guardOn) return undefined;
     const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());
     return reason === undefined ? undefined : { block: true, reason };

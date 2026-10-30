@@ -640,3 +640,16 @@ test("an oversized search result keeps every hit, a cut read says how to see mor
   const read = await calls.handlers["tool_result"](file, { cwd: process.cwd() });
   assert.match(read.content.map((c: any) => c.text).join(""), /Read again with offset and limit to see other parts\./);
 });
+
+test("a web search asking for more than 5 results is capped at the tool's default of 5", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const { ctx } = uiContext(true);
+  const call = { toolName: "web_search", input: { query: "latest ML research", max_results: 10 } };
+  assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
+  assert.equal(call.input.max_results, 5);
+  const small = { toolName: "web_search", input: { query: "q", max_results: 3 } };
+  await calls.handlers["tool_call"](small, ctx);
+  assert.equal(small.input.max_results, 3);
+});
