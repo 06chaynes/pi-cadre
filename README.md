@@ -48,7 +48,7 @@ pi install git:github.com/06chaynes/pi-cadre    # latest main
 
 The extension registers the `llama-cpp` provider at startup. It reads each server's per-slot context from `/props` and uses the launcher default (Spark 32768, LFM3 16384) for a server that is not running yet. Thinking levels are sent as chat template kwargs: Spark accepts `low` and `high` effort, so Pi's `medium` maps to `high`.
 
-It also registers `llama-cpp/cadre`, a model that picks Spark or LFM3 for each prompt. LFM3 gets questions and single-spot edits (a docstring, a typo, a rename); Spark gets everything else, including anything that mentions tests, several steps, or a change to behavior. A turn stays on the model that started it, a failed LFM3 request retries on Spark, and prompts the router cannot classify go to Spark. Routing to LFM3 needs at least 8192 tokens per LFM3 slot.
+It also registers `llama-cpp/cadre`, a model that picks Spark or LFM3 for each prompt. LFM3 gets questions and single-spot edits (a docstring, a typo, a rename); Spark gets everything else, including anything that mentions tests, several steps, or a change to behavior. A turn stays on the model that started it unless the conversation outgrows LFM3 (for example after a large tool result), a failed LFM3 request retries on Spark, and prompts the router cannot classify go to Spark. Routing to LFM3 needs at least 8192 tokens per LFM3 slot.
 
 When Pi starts with a UI, the extension offers to start any server that is not running, and to switch to `cadre` when another provider's model is selected. With only the npm package installed, servers it starts use the launcher defaults, and `SPARK_MODEL` / `LFM3_MODEL` in the environment select local `.gguf` files or other Hugging Face IDs. They keep running after Pi exits, with logs in `~/.local/state/pi-cadre` (or `$XDG_STATE_HOME/pi-cadre`).
 
@@ -75,6 +75,8 @@ Command-line flags override the config; run `start_llama_server.sh --help` to li
 On machines with more than one GPU, llama.cpp splits layers across all of them. Add `-- --device <name>` to pin a server to one device; `llama-server --list-devices` lists the names.
 
 With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
+
+When a read or bash result is cut off, the extension appends the lines outside the shown part that contain words from your request, with line numbers, so the model gets them even if it does not page through the rest.
 
 Pi commands added by the extension:
 

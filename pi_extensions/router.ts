@@ -5,6 +5,8 @@
  */
 
 const MAX_LFM3_PROMPT = 300;
+// English prose runs about 4 characters per token and code or JSON fewer; 3 overestimates both.
+const CHARS_PER_TOKEN = 3;
 const QUESTION_START = /^\s*(what|where|which|who|when|why|how|does|do|is|are|can|could|explain|describe|show|list|find|summari[sz]e)\b/i;
 const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix|change|update|remove|delete|plan|design|review|diagnose|debug|investigate|tests?)\b/i;
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
@@ -32,6 +34,22 @@ export function promptText(messages: readonly any[]): string {
     .join("\n");
 }
 
+/** Upper estimate of the tokens in `messages`: text blocks by length, other blocks (tool calls, thinking) as JSON. */
+export function estimateTokens(messages: readonly any[]): number {
+  let chars = 0;
+  for (const message of messages) {
+    const content = message?.content;
+    if (typeof content === "string") {
+      chars += content.length;
+      continue;
+    }
+    for (const block of content ?? []) {
+      chars += typeof block?.text === "string" ? block.text.length : JSON.stringify(block).length;
+    }
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
 interface RouteModels<M> {
   spark: M;
   /** Undefined when LFM3 is offline or its slots are too small for Pi. */
@@ -39,11 +57,18 @@ interface RouteModels<M> {
 }
 
 /**
- * Physical model and thinking level for one request. A turn stays on the model that started it, a failed LFM3
- * request retries on Spark, and requests outside the agent loop (compaction summaries) go to Spark.
+ * Physical model and thinking level for one request. A turn stays on the model that started it unless the conversation
+ * outgrows LFM3 (for example after a large tool result), a failed request retries on Spark, and requests outside the
+ * agent loop (compaction summaries) go to Spark.
  */
-export function routeRequest<M extends { id: string }>(request: any, models: RouteModels<M>) {
-  const { spark, lfm3 } = models;
+export function routeRequest<M extends { id: string; contextWindow: number; maxTokens: number }>(
+  request: any,
+  models: RouteModels<M>,
+) {
+  const { spark } = models;
+  // LFM3 takes a request only if the conversation, plus room for its reply, fits its context window.
+  const fits = models.lfm3 !== undefined && estimateTokens(request.messages ?? []) <= models.lfm3.contextWindow - models.lfm3.maxTokens;
+  const lfm3 = fits ? models.lfm3 : undefined;
   const isLfm3 = (model?: { id: string }) => lfm3 !== undefined && model?.id === lfm3.id;
   switch (request.reason) {
     case "retry": {

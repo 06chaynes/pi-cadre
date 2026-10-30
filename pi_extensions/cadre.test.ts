@@ -44,7 +44,7 @@ function fakePi() {
 /** Context with a UI whose confirm dialogs answer `answer`, recording their titles. */
 function uiContext(answer: boolean, model?: { provider: string; id: string }) {
   const asked: string[] = [];
-  const registry = { find: (provider: string, id: string) => ({ provider, id }) };
+  const registry = { find: (provider: string, id: string) => ({ provider, id, contextWindow: 16384, maxTokens: 4096 }) };
   const ctx = {
     cwd: process.cwd(),
     hasUI: true,
@@ -88,7 +88,7 @@ test("at startup with a UI, offers to switch to cadre when another model is sele
   const { ctx, asked } = uiContext(true, { provider: "ollama", id: "gemma" });
   await calls.handlers["session_start"]({ reason: "startup" }, ctx);
   assert.equal(asked.length, 1);
-  assert.deepEqual(calls.models, [{ provider: "llama-cpp", id: "cadre" }]);
+  assert.deepEqual(calls.models.map((m: any) => `${m.provider}/${m.id}`), ["llama-cpp/cadre"]);
 });
 
 test("does not prompt when a llama-cpp model is selected, or without a UI", async () => {
@@ -123,4 +123,25 @@ test("the tool_call hook blocks until /cadre-guard off", async () => {
   assert.match(blocked.reason, /outside the project/);
   await calls.commands["cadre-guard"].handler("off", ctx);
   assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
+});
+
+test("tool_result appends unseen matching lines to a truncated read", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const cwd = mkdtempSync(join(tmpdir(), "cadre-tr-"));
+  writeFileSync(join(cwd, "log.txt"), [...Array(50).fill("filler line"), "the release date was March 3"].join("\n"));
+  await calls.handlers["before_agent_start"]({ prompt: "When was the release date?" });
+  const event = {
+    toolName: "read",
+    input: { path: "log.txt" },
+    content: [{ type: "text", text: "filler line" }],
+    details: { truncation: { truncated: true, outputLines: 10, totalLines: 51 } },
+  };
+  const result = await calls.handlers["tool_result"](event, { cwd });
+  assert.equal(result.content[0].text, "filler line");
+  assert.match(result.content[1].text, /^51: the release date was March 3$/m);
 });

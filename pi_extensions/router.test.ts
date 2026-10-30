@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chooseModel, promptText, routeRequest } from "./router.ts";
+import { chooseModel, estimateTokens, promptText, routeRequest } from "./router.ts";
 
 test("questions and single-spot edits go to LFM3", () => {
   for (const prompt of [
@@ -43,8 +43,8 @@ test("promptText reads the last user message in string or block form", () => {
   assert.equal(promptText([{ role: "system", content: "s" }]), "");
 });
 
-const spark = { id: "spark" } as any;
-const lfm3 = { id: "lfm3" } as any;
+const spark = { id: "spark", contextWindow: 32768, maxTokens: 8192 } as any;
+const lfm3 = { id: "lfm3", contextWindow: 16384, maxTokens: 4096 } as any;
 const request = (extra: Record<string, unknown>) =>
   ({ thinkingLevel: "medium", messages: [{ role: "user", content: "What does reserve do?" }], ...extra }) as any;
 
@@ -71,4 +71,25 @@ test("direct requests and an unavailable LFM3 go to Spark", () => {
   assert.equal(routeRequest(request({ reason: "user" }), { spark }).model, spark);
   const previous = { model: lfm3, thinkingLevel: "low" };
   assert.equal(routeRequest(request({ reason: "continuation", previous }), { spark }).model, spark);
+});
+
+// A web search result about 30,000 tokens long, as in the session that overflowed LFM3's 16k slot.
+const searchResult = { role: "toolResult", content: [{ type: "text", text: "Mersenne prime record table row. ".repeat(3000) }] };
+
+test("estimateTokens counts every message's text conservatively", () => {
+  assert.ok(estimateTokens([searchResult]) > 30000);
+  assert.ok(estimateTokens([{ role: "user", content: "What does reserve do?" }]) < 20);
+});
+
+test("a turn moves to Spark when its conversation no longer fits LFM3", () => {
+  const previous = { model: lfm3, thinkingLevel: "off" };
+  const messages = [{ role: "user", content: "What year was the largest prime found?" }, searchResult];
+  assert.equal(routeRequest(request({ reason: "continuation", previous, messages }), { spark, lfm3 }).model, spark);
+  const small = [{ role: "user", content: "What does reserve do?" }, { role: "toolResult", content: [{ type: "text", text: "def reserve(): ..." }] }];
+  assert.equal(routeRequest(request({ reason: "continuation", previous, messages: small }), { spark, lfm3 }).model, lfm3);
+});
+
+test("a question goes to Spark when the history is too long for LFM3", () => {
+  const messages = [searchResult, { role: "user", content: "What does reserve do?" }];
+  assert.equal(routeRequest(request({ reason: "user", messages }), { spark, lfm3 }).model, spark);
 });
