@@ -103,6 +103,9 @@ const MORE: Record<string, string> = {
   web_fetch: "Fetch a more specific page, or search for the part you need.",
 };
 const MORE_DEFAULT = "Call the tool again with a narrower request to see other parts.";
+// Thinking budgets per request, by reasoning effort (never more than half the reply limit).
+const THINK_BUDGET_LOW = 1024;
+const THINK_BUDGET_HIGH = 4096;
 // Tokens left free in a slot beyond the prompt and reply limit.
 const SLOT_MARGIN_TOKENS = 64;
 // Private to the user; a shared temporary directory would let another user redirect the logs.
@@ -354,7 +357,13 @@ export default async function (pi: ExtensionAPI) {
     const field = ["max_completion_tokens", "max_tokens"].find((name) => typeof payload?.[name] === "number");
     if (!key || !model || !field) return undefined;
     const left = model.contextWindow - (await requestTokens(key, payload)) - SLOT_MARGIN_TOKENS;
-    return { ...payload, [field]: Math.max(1, Math.min(model.maxTokens, left)) };
+    const limit = Math.max(1, Math.min(model.maxTokens, left));
+    // With thinking on, reasoning gets a budget (llama-server's thinking_budget_tokens) well below the reply limit: in
+    // testing, Spark spent a whole 8,192-token reply deliberating and stopped with no answer and no tool call.
+    const kwargs = payload.chat_template_kwargs ?? {};
+    if (kwargs.enable_thinking !== true) return { ...payload, [field]: limit };
+    const budget = Math.min(kwargs.reasoning_effort === "high" ? THINK_BUDGET_HIGH : THINK_BUDGET_LOW, Math.floor(limit / 2));
+    return { ...payload, [field]: limit, thinking_budget_tokens: budget };
   });
 
   pi.on("message_end", async (event) => {
@@ -573,7 +582,10 @@ export default async function (pi: ExtensionAPI) {
     const unanswered = last?.role === "toolResult" || (last?.role === "assistant" && !textOf(last).trim());
     if (OPTS.has("continue") && unanswered && !continued) {
       continued = true;
-      return { continue: true };
+      // Pi continues after an assistant message only when new context is added, so a cut-off reply gets a note.
+      if (last?.role !== "assistant") return { continue: true };
+      const content = "[Your last reply was cut off at the length limit before any answer or tool call. Continue the task.]";
+      return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-continue", content, display: false }] };
     }
     if (unanswered) return undefined;
     if (!sourcesChecked) {

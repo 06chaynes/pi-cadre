@@ -826,3 +826,38 @@ test("the system message states today's date, which Pi's own prompt does not", a
   const today = new Date().toISOString().slice(0, 10);
   assert.ok(system.content.includes(`Today's date is ${today}.`), system.content);
 });
+
+test("with thinking on, each request gets a thinking budget well below its reply limit", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const request = (kwargs: Record<string, unknown>) => ({
+    type: "before_provider_request",
+    payload: { model: "XHToken/Spark-X2.6-4B-GGUF:Q4_K_M", messages: [{ role: "user", content: "hi" }], max_tokens: 8192, chat_template_kwargs: kwargs },
+  });
+  const low = await calls.handlers["before_provider_request"](request({ enable_thinking: true, reasoning_effort: "low" }), uiContext(true).ctx);
+  assert.equal(low.thinking_budget_tokens, 1024);
+  const high = await calls.handlers["before_provider_request"](request({ enable_thinking: true, reasoning_effort: "high" }), uiContext(true).ctx);
+  assert.equal(high.thinking_budget_tokens, 4096);
+  const off = await calls.handlers["before_provider_request"](request({ enable_thinking: false }), uiContext(true).ctx);
+  assert.equal(off.thinking_budget_tokens, undefined);
+});
+
+test("a run whose last reply was cut off with no answer continues with a note, which Pi needs after an assistant message", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "continue";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const cut = { ...toolCall("x", "x", {}), content: [{ type: "thinking", thinking: "deliberating ".repeat(500) }], stopReason: "length" };
+    const { session } = realSession([{ role: "user", content: "Research six facts" }, cut]);
+    const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+    assert.equal(result.continue, true);
+    assert.deepEqual([result.entries[0].type, result.entries[0].customType], ["custom_message", "cadre-continue"]);
+    assert.match(result.entries[0].content, /cut off .* before any answer or tool call/);
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
