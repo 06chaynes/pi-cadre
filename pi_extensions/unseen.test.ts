@@ -112,3 +112,7 @@ test("a shortened search result keeps every hit's title and URL and the passages
 test("text that is not a list of search hits is left to shortenText", () => {
   assert.equal(shortenSearch("x".repeat(10_000), "query", 3000), undefined);
 });
+
+test("readLinesCapped refuses device files instead of reading forever", () => {
+  assert.equal(readLinesCapped("/dev/zero", 1024), undefined);
+});

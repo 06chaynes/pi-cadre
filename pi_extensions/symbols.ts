@@ -4,7 +4,7 @@
  * right every time. Resolving the name in code removes the guess for any model.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 
 import { projectFiles } from "./projectmap.ts";
@@ -44,7 +44,10 @@ export function namedSymbols(cwd: string, prompt: string, maxChars: number): str
   for (const file of projectFiles(cwd).filter((f) => CODE.has(extname(f).toLowerCase())).slice(0, MAX_FILES)) {
     let lines: string[];
     try {
-      if (statSync(join(cwd, file)).size > MAX_FILE_BYTES) continue;
+      // Regular files only, checked without following links: a symlink could reach outside the project, and a device
+      // such as /dev/zero would never finish reading.
+      const st = lstatSync(join(cwd, file));
+      if (!st.isFile() || st.size > MAX_FILE_BYTES) continue;
       lines = readFileSync(join(cwd, file), "utf8").split("\n");
     } catch {
       continue;

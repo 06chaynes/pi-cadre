@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -39,4 +39,14 @@ test("a named method is located in TypeScript, Python, and Rust", () => {
 test("names that are not defined in the project add nothing", () => {
   const dir = project({ "a.py": "def other():\n    pass\n" });
   assert.equal(namedSymbols(dir, "What does `nothing_here` do?", 2000), "");
+});
+
+test("symlinks and device files are never read: nothing outside the project reaches the prompt, and nothing hangs", () => {
+  const outside = project({ "secret.py": "def leaked_secret():\n    pass\n" });
+  const dir = project({ "a.py": "def other():\n    pass\n" });
+  symlinkSync(join(outside, "secret.py"), join(dir, "linked.py"));
+  symlinkSync("/dev/zero", join(dir, "zero.py"));
+  const started = Date.now();
+  assert.equal(namedSymbols(dir, "What does `leaked_secret` do?", 2000), "");
+  assert.ok(Date.now() - started < 5000, "did not hang on /dev/zero");
 });

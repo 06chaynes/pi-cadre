@@ -22,7 +22,9 @@ const MAX_LINE_CHARS = 300;
 /** Lines of a text file, or undefined when it is missing, unreadable, or larger than `maxBytes`. */
 export function readLinesCapped(path: string, maxBytes: number): string[] | undefined {
   try {
-    if (statSync(path).size > maxBytes) return undefined;
+    const st = statSync(path);
+    // A device (such as /dev/zero) reports no size and never ends.
+    if (!st.isFile() || st.size > maxBytes) return undefined;
     return readFileSync(path, "utf8").split("\n");
   } catch {
     return undefined;
