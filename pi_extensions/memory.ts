@@ -4,7 +4,7 @@
  * choosing to keep it.
  */
 
-import { STOPWORDS } from "./unseen.ts";
+import { terms as words } from "./unseen.ts";
 
 export interface Stored {
   /** The call that produced the text, such as `web_search {"query":"..."}`. */
@@ -32,11 +32,9 @@ const ANNOTATION = /^\[(Result shortened from |Lines outside the part shown abov
 // A list item in a task: "1. ...", "2) ...", "- ...", "* ...".
 const ITEM = /^\s*(?:\d+[.)]|[-*•])\s+(.+)$/;
 
-/** Search terms: lowercase words of 3+ characters and numbers, without stopwords, with a plural "s" removed. */
+/** Search terms (see unseen.ts) with a plural "s" removed. */
 function terms(text: string): string[] {
-  return (text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [])
-    .filter((word) => !STOPWORDS.has(word))
-    .map((word) => (word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word));
+  return words(text).map((word) => (word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word));
 }
 
 /**

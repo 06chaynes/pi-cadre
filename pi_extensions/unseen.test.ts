@@ -92,3 +92,8 @@ test("shortenText leaves text within the limit unchanged and cuts one long line 
   const long = shortenText("x".repeat(10_000), "anything", 1_000);
   assert.ok(long.length <= 1_000 && long.startsWith("xxx"));
 });
+
+test("keywords keep two-character acronyms written in capitals, not short lowercase words", () => {
+  assert.deepEqual(keywords("What are the latest research results in the field of ML?"), ["latest", "research", "results", "field", "ml"]);
+  assert.deepEqual(keywords("Is AI or 3D printing in it?"), ["ai", "3d", "printing"]);
+});

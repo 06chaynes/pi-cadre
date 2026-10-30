@@ -23,10 +23,21 @@ export const STOPWORDS = new Set(
     .split(" "),
 );
 
-/** Distinctive words of a request, in order: lowercase letters and digits, three or more characters, no stopwords. */
+/**
+ * Search terms of a text, in order and lowercased: words of three or more letters and digits, and two-character
+ * acronyms written in capitals (ML, AI, 3D), without stopwords.
+ */
+export function terms(text: string): string[] {
+  const words = text.match(/\b[A-Z0-9]*[A-Z][A-Z0-9]*\b|[A-Za-z0-9]+/g) ?? [];
+  return words
+    .filter((word) => word.length >= 3 || (word.length === 2 && word === word.toUpperCase() && /[A-Z]/.test(word)))
+    .map((word) => word.toLowerCase())
+    .filter((word) => !STOPWORDS.has(word));
+}
+
+/** Distinctive words of a request, in order, each once (see terms). */
 export function keywords(prompt: string): string[] {
-  const words = prompt.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [];
-  return [...new Set(words)].filter((word) => !STOPWORDS.has(word));
+  return [...new Set(terms(prompt))];
 }
 
 /** Lines of a text file, or undefined when it is missing, unreadable, or larger than `maxBytes`. */
