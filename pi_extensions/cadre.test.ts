@@ -631,3 +631,41 @@ test("a large result tells the model, as it reads it, to note what it needs befo
   const other = await calls.handlers["tool_result"](event("y".repeat(3000)), { ...ctx, model: { provider: "ollama", id: "gemma" } });
   assert.equal(other, undefined);
 });
+
+test("with recall, passages of cleared web results that match the task come back at the end of the request", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "clear,recall";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const prompt = "Research each of these and write research.md:\n1. The year the largest known prime number was found, and its digits.\n2. The local config path.";
+    const prime = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler line\n".repeat(300);
+    const config = "The local config path is /etc/app/largest-prime.conf, found in 2024 digits.\n\n" + "z\n".repeat(2000);
+    const { session, ids } = realSession([
+      { role: "user", content: prompt },
+      toolCall("c1", "web_search", { query: "largest known prime" }),
+      toolResult("c1", "web_search", prime),
+      toolCall("c2", "read", { path: "config.txt" }),
+      toolResult("c2", "read", config),
+    ]);
+    // Both results were cleared; only the web result may be recalled, since a file can have changed since it was read.
+    session.appendContextEdit(ids[2], { content: "[web_search result cleared]" });
+    session.appendContextEdit(ids[4], { content: "[read result cleared]" });
+    const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+    const last = result.messages.at(-1);
+    assert.equal(last.role, "user");
+    const text = JSON.stringify(last.content);
+    assert.match(text, /Passages from earlier tool results/);
+    assert.match(text, /41,024,320 digits/);
+    assert.match(text, /web_search \{\\"query\\":\\"largest known prime\\"\}/);
+    assert.doesNotMatch(text, /etc\/app/);
+
+    // Nothing cleared: nothing to recall.
+    const { session: fresh } = realSession([{ role: "user", content: prompt }, toolCall("c1", "web_search", { query: "q" }), toolResult("c1", "web_search", prime)]);
+    assert.equal(await calls.handlers["context"]({ type: "context", messages: fresh.buildSessionContext().messages }, toolContext(fresh)), undefined);
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});

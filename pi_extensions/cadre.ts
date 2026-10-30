@@ -32,6 +32,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { guardReason } from "./guard.ts";
 import { isResearchQuestion, routeRequest } from "./router.ts";
+import { recall, taskQueries } from "./memory.ts";
 import { ungroundedParts } from "./notes.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { shortenText, unseenNote } from "./unseen.ts";
@@ -63,6 +64,11 @@ const SYSTEM_ALLOWANCE = 4096;
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
 const NOTE_BUDGET_CHARS = 12000;
+// Recall (see memory.ts): most characters of cleared passages brought back per request. Local tools are left out: a
+// file or command output can have changed since, and running the tool again is exact.
+const RECALL_MAX_CHARS = 6000;
+const LOCAL_TOOLS = new Set(["read", "bash", "grep", "find", "ls", "edit", "write"]);
+
 // Size of the digest of earlier requests, and how much of an older answer it keeps once that size is reached.
 const DIGEST_MAX_CHARS = 7000;
 const DIGEST_SHORT_ANSWER_CHARS = 200;
@@ -386,6 +392,7 @@ export default async function (pi: ExtensionAPI) {
   //   rules     AGENT_RULES instead of CODING_RULES
   //   hint      a research question gets a hidden message telling the model to search first
   //   tools     a research question gets only RESEARCH_TOOLS for its run
+  //   recall    passages of cleared web results that match the task come back with each request
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
 
@@ -476,7 +483,8 @@ export default async function (pi: ExtensionAPI) {
       if (unseen.has(id)) continue;
       const note = text.match(new RegExp(`^\\[${name} result, ([\\d,]+) characters, cleared`));
       const size = note ? note[1] : text.length.toLocaleString("en-US");
-      const bare = `[${name} result, ${size} characters, cleared from context. Facts you recorded with note stay in context; run ${name} again if it is needed.]`;
+      const noteHint = noteTool ? "Facts you recorded with note stay in context; " : "";
+      const bare = `[${name} result, ${size} characters, cleared from context. ${noteHint}run ${name} again if it is needed.]`;
       if (note) {
         // An earlier extract stays while the extracts fit their budget; past it, it shrinks to the one-line note.
         if (text === bare) continue;
@@ -491,8 +499,8 @@ export default async function (pi: ExtensionAPI) {
         continue;
       }
       const extract =
-        `[${name} result, ${size} characters, cleared from context ${reason}. Facts you recorded with note stay in ` +
-        `context. Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
+        `[${name} result, ${size} characters, cleared from context ${reason}. ${noteTool ? "Facts you recorded with note stay in context. " : ""}` +
+        `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
         shortenText(text, `${callArgs.get(message.toolCallId) ?? ""} ${lastPrompt}`, CLEAR_KEEP_CHARS);
       const content = noteChars + extract.length <= NOTE_BUDGET_CHARS ? extract : bare;
       noteChars += content === extract ? extract.length : 0;
@@ -574,6 +582,15 @@ export default async function (pi: ExtensionAPI) {
   // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
   // that compaction removed from context is restored in one message after the compaction summary.
   pi.on("context", async (event, ctx) => {
+    let messages = [...event.messages];
+    let changed = false;
+    if (OPTS.has("recall")) {
+      const recalled = recallMessage(messages, ctx);
+      if (recalled) {
+        messages.push(recalled);
+        changed = true;
+      }
+    }
     const visible = new Set(
       event.messages.flatMap((message: any) =>
         message.role === "assistant" ? message.content.filter((b: any) => b.type === "toolCall" && b.name === NOTE_TOOL.name).map((b: any) => b.id) : [],
@@ -591,13 +608,45 @@ export default async function (pi: ExtensionAPI) {
       }
     }
     const lost = [...latest.values()].filter((note) => !visible.has(note.id));
-    if (!lost.length) return undefined;
-    const text = ["Your notes from earlier in this task (restored after compaction):", ...lost.map((n) => `- ${n.topic}: ${n.fact} (source: ${n.source})`)].join("\n");
-    const at = event.messages.findIndex((m: any) => m.role !== "compactionSummary" && m.role !== "branchSummary");
-    const messages = [...event.messages];
-    messages.splice(at < 0 ? messages.length : at, 0, { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as any);
-    return { messages };
+    if (lost.length) {
+      const text = ["Your notes from earlier in this task (restored after compaction):", ...lost.map((n) => `- ${n.topic}: ${n.fact} (source: ${n.source})`)].join("\n");
+      const at = messages.findIndex((m: any) => m.role !== "compactionSummary" && m.role !== "branchSummary");
+      messages.splice(at < 0 ? messages.length : at, 0, { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as any);
+      changed = true;
+    }
+    return changed ? { messages } : undefined;
   });
+
+  /**
+   * A message with the passages of cleared or compacted web results that best match the task (one query per listed
+   * item), or undefined when there are none. Results still in context in full are not stored.
+   */
+  const recallMessage = (messages: readonly any[], ctx: ExtensionContext) => {
+    const shown = new Map<string, string>();
+    for (const m of messages) if (m.role === "toolResult") shown.set(m.toolCallId, textOf(m));
+    const branch = ctx.sessionManager.getBranch().flatMap((entry: any) => (entry.type === "message" ? [entry.message] : []));
+    const calls = new Map<string, string>();
+    for (const m of branch) {
+      if (m.role !== "assistant") continue;
+      for (const block of m.content ?? []) if (block.type === "toolCall") calls.set(block.id, `${block.name} ${JSON.stringify(block.arguments ?? {})}`);
+    }
+    const stored = branch.flatMap((m: any) => {
+      if (m.role !== "toolResult" || m.isError || m.toolName === NOTE_TOOL.name || LOCAL_TOOLS.has(m.toolName)) return [];
+      const text = textOf(m);
+      return shown.get(m.toolCallId) === text ? [] : [{ source: calls.get(m.toolCallId) ?? m.toolName, text }];
+    });
+    if (!stored.length) return undefined;
+    const task = textOf([...branch].reverse().find((m: any) => m.role === "user") ?? {});
+    const step = [...messages].reverse().find((m: any) => m.role === "assistant");
+    const stepText = step ? `${textOf(step)} ${(step.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => JSON.stringify(b.arguments)).join(" ")}` : "";
+    const found = recall(stored, taskQueries(task, stepText), RECALL_MAX_CHARS);
+    if (!found.length) return undefined;
+    const text = [
+      "[Passages from earlier tool results in this task, brought back for the current step:]",
+      ...found.map((p) => `From ${p.source}:\n${p.text}`),
+    ].join("\n\n");
+    return { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as any;
+  };
 
   pi.on("context_with_system", async (event) => {
     const system = event.messages?.[0];

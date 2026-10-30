@@ -16,7 +16,7 @@ import { isAbsolute, join } from "node:path";
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_MATCHES = 20;
 const MAX_LINE_CHARS = 300;
-const STOPWORDS = new Set(
+export const STOPWORDS = new Set(
   ("about according all also and answer any are but can could did does each explain file for from get give had has " +
     "have how into its just like not one only our out please read sentence should show some tell than that the " +
     "their them then there they this use using was were what when where which who why will with would you your")
