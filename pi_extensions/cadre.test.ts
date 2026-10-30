@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import extension, { modelConfigs } from "./cadre.ts";
+import extension, { guardReason, modelConfigs } from "./cadre.ts";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -21,10 +21,15 @@ function serveProps(contexts: Record<number, number>) {
 
 /** Minimal ExtensionAPI stand-in that records registrations and thinking changes. */
 function fakePi() {
-  const calls = { providers: {} as Record<string, any>, handlers: {} as Record<string, Function>, thinking: [] as string[] };
+  const calls = {
+    providers: {} as Record<string, any>,
+    commands: {} as Record<string, any>,
+    handlers: {} as Record<string, Function>,
+    thinking: [] as string[],
+  };
   const pi = {
     registerProvider: (name: string, config: unknown) => (calls.providers[name] = config),
-    registerCommand: () => {},
+    registerCommand: (name: string, command: unknown) => (calls.commands[name] = command),
     on: (event: string, handler: Function) => (calls.handlers[event] = handler),
     setThinkingLevel: (level: string) => calls.thinking.push(level),
   };
@@ -78,4 +83,63 @@ test("auto thinking turns on for review and diagnosis prompts only", async () =>
     await calls.handlers["before_agent_start"]({ prompt });
   }
   assert.deepEqual(calls.thinking, ["medium", "medium", "off"]);
+});
+
+const HOME = "/home/u";
+const CWD = "/home/u/proj";
+const guard = (toolName: string, input: Record<string, unknown>) => guardReason(toolName, input, CWD, HOME);
+
+test("the guard blocks the commands an agent ran outside its project", () => {
+  for (const command of [
+    "cd /home/u/Documents/lfm-test && ls",
+    'grep -rln "commit_ships" /home/u --include=*.py',
+    "find / -name test_store.py 2>/dev/null",
+    "ls ~/.ssh",
+    "cat $HOME/.npmrc",
+    "cat ${HOME}/.npmrc",
+    "ls ../other",
+  ]) {
+    assert.ok(guard("bash", { command }), command);
+  }
+});
+
+test("the guard allows project, system, and plain commands", () => {
+  for (const command of [
+    "python3 -m pytest -q",
+    "cd /home/u/proj/tests && ls",
+    "ls sub/dir ./x",
+    "cat /etc/hosts /usr/lib/os-release",
+    "curl -s http://127.0.0.1:8080/health",
+    "git diff -- a/b",
+  ]) {
+    assert.equal(guard("bash", { command }), undefined, command);
+  }
+});
+
+test("writes and edits must stay inside the project", () => {
+  assert.equal(guard("write", { path: "src/a.py" }), undefined);
+  assert.equal(guard("edit", { path: "/home/u/proj/a.py" }), undefined);
+  assert.ok(guard("write", { path: "/tmp/a.py" }));
+  assert.ok(guard("edit", { path: "../other/a.py" }));
+});
+
+test("reads and searches may use system paths but not the rest of home", () => {
+  assert.equal(guard("read", { path: "/etc/hosts" }), undefined);
+  assert.equal(guard("ls", {}), undefined);
+  assert.equal(guard("grep", { pattern: "x", path: "tests" }), undefined);
+  assert.ok(guard("read", { path: "/home/u/.ssh/id_ed25519" }));
+  assert.ok(guard("find", { pattern: "*.py", path: "/" }));
+});
+
+test("the tool_call hook blocks until /cadre-guard off", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const ctx = { cwd: process.cwd(), ui: { notify: () => {} } };
+  const call = { toolName: "bash", input: { command: "find / -name x" } };
+  const blocked = await calls.handlers["tool_call"](call, ctx);
+  assert.equal(blocked.block, true);
+  assert.match(blocked.reason, /outside the project/);
+  await calls.commands["cadre-guard"].handler("off", ctx);
+  assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
 });

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Added
+
+- Path guard, on by default. Blocks writes and edits outside the working directory, and reads, searches, and bash commands that reach the filesystem root or the home directory outside the working directory. `/cadre-guard off` turns it off for the session. In testing, Spark's first command in a sandbox was `cd` into an unrelated repo under the home directory; the guard blocked it and Spark returned to the project.
+
 ## [0.1.0]
 
 ### Added

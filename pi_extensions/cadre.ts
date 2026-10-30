@@ -8,10 +8,18 @@
  * Commands:
  *   /cadre-status              health, model file, and per-slot context of both servers
  *   /cadre-thinking <mode>     auto | off | minimal | low | medium | high
+ *   /cadre-guard on|off        path guard, on by default
+ *
+ * The path guard blocks writes and edits outside the working directory, and reads, searches, and bash commands that
+ * reach the filesystem root or the home directory outside the working directory. Bash commands are checked by the
+ * paths that appear in them, so the guard catches mistakes rather than enforcing a sandbox.
  *
  * In auto mode the thinking level is set per prompt: medium for planning, architecture, diagnosis, debugging, and
  * review, off otherwise. Every request gets short coding rules appended to the system message.
  */
+
+import { homedir } from "node:os";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -52,6 +60,42 @@ const CODING_RULES = [
   "3. Never introduce redundant or conflicting local imports inside function bodies.",
   "4. Do not include conversational preambles or post-generation commentary.",
 ].join("\n");
+
+const WRITE_TOOLS = new Set(["write", "edit"]);
+const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
+
+function isInside(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/** Resolves a shell word that looks like a path, expanding ~, $HOME, and ${HOME}. Returns undefined for other words. */
+function shellPath(word: string, cwd: string, home: string): string | undefined {
+  const expanded = word.replace(/^(~|\$\{HOME\}|\$HOME)(?=\/|$)/, home);
+  if (expanded !== word || expanded.startsWith("/") || expanded.startsWith(".") || expanded.includes("/")) {
+    return resolve(cwd, expanded);
+  }
+  return undefined;
+}
+
+/**
+ * Returns why a tool call reaches outside the project at `cwd`, or undefined when it does not. Writes and edits must
+ * stay inside `cwd`. Other paths may not be the filesystem root or inside `home` but outside `cwd`.
+ */
+export function guardReason(toolName: string, input: Record<string, unknown>, cwd: string, home: string): string | undefined {
+  const outsideReadArea = (path: string) => path === resolve("/") || (isInside(path, home) && !isInside(path, cwd));
+  let paths: string[] = [];
+  if (toolName === "bash" && typeof input.command === "string") {
+    paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, cwd, home) ?? []);
+  } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
+    paths = [resolve(cwd, input.path)];
+  }
+  const outside = paths.find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, cwd) : outsideReadArea(path)));
+  return outside === undefined
+    ? undefined
+    : `${toolName} reaches ${outside}, outside the project ${cwd}. Work inside the project, or ask the user to run /cadre-guard off.`;
+}
 
 const serverUrl = (key: ServerKey) => `http://${HOST}:${SERVERS[key].port}`;
 
@@ -96,6 +140,7 @@ export default async function (pi: ExtensionAPI) {
   });
 
   let thinkingMode: ThinkingMode = "auto";
+  let guardOn = true;
 
   pi.registerCommand("cadre-status", {
     description: "Show health, model file, and per-slot context of both llama-server instances",
@@ -126,6 +171,25 @@ export default async function (pi: ExtensionAPI) {
       if (mode !== "auto") pi.setThinkingLevel(mode);
       ctx.ui.notify(`Thinking mode: ${mode}`, "info");
     },
+  });
+
+  pi.registerCommand("cadre-guard", {
+    description: "Turn the path guard on or off: /cadre-guard [on|off]",
+    handler: async (args, ctx) => {
+      const mode = (args || "").trim().toLowerCase();
+      if (mode !== "on" && mode !== "off") {
+        ctx.ui.notify(`Path guard is ${guardOn ? "on" : "off"}. Usage: /cadre-guard [on|off]`, "info");
+        return;
+      }
+      guardOn = mode === "on";
+      ctx.ui.notify(`Path guard: ${mode}`, guardOn ? "info" : "warning");
+    },
+  });
+
+  pi.on("tool_call", async (event, ctx) => {
+    if (!guardOn) return undefined;
+    const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());
+    return reason === undefined ? undefined : { block: true, reason };
   });
 
   pi.on("before_agent_start", async (event) => {

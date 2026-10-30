@@ -76,6 +76,7 @@ Pi commands added by the extension:
 
 - `/cadre-status`: health, model file, and per-slot context of both servers.
 - `/cadre-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, diagnosis, debugging, investigation, or review run with medium thinking, and all others run with thinking off.
+- `/cadre-guard on|off`: path guard, on by default. Blocks writes and edits outside the working directory, and reads, searches, and bash commands that reach `/` or your home directory outside the working directory. Bash commands are checked by the paths written in them, so it catches mistakes rather than acting as a sandbox.
 
 ## Python client
 
