@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chooseModel, promptText, routeRequest } from "./router.ts";
+import { chooseModel, promptText, researchQuestion, routeRequest } from "./router.ts";
 
 test("questions about local code and single-spot edits go to LFM3", () => {
   for (const prompt of [
@@ -103,4 +103,25 @@ test("an edit that started on LFM3 continues on Spark; a question stays on LFM3"
   assert.equal(continuing("Add a one-line doc comment to `release` in src/inventory.ts saying what it does."), "spark");
   assert.equal(continuing("Rename the method `release` to `unreserve` in src/lib.rs."), "spark");
   assert.equal(continuing("What does `available` in inventory/store.py return?"), "lfm3");
+});
+
+test("researchQuestion is true for questions about the world and explicit research requests, not for local code or changes", () => {
+  for (const prompt of [
+    "How long can a sperm whale hold it's breath while diving on average?",
+    "Who won the 2024 Nobel Prize in Physics?",
+    "What are the latest research results in the field of ML",
+    "Research each of these and write the results to research.md as a markdown table.",
+    "Look up the population of Tokyo.",
+  ]) {
+    assert.equal(researchQuestion(prompt), true, prompt);
+  }
+  for (const prompt of [
+    "What does Inventory.available in inventory/store.py return?",
+    "Where does `reserve` release the reservation?",
+    "Explain how this function works",
+    "Fix the typo in the README heading",
+    "Add a method restock_report(self, threshold) to Inventory.",
+  ]) {
+    assert.equal(researchQuestion(prompt), false, prompt);
+  }
 });

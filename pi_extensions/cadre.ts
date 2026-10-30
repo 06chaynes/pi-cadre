@@ -30,7 +30,7 @@ import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { guardReason } from "./guard.ts";
-import { routeRequest } from "./router.ts";
+import { researchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
@@ -419,12 +419,16 @@ export default async function (pi: ExtensionAPI) {
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
   //   neutral   numbers a search query adds that no request or earlier result contains are removed
   //   map       the system message lists the project's files (see projectmap.ts)
+  //   claims    the end-of-run source check also names numbers, quotes and URLs no source supports (see claims.ts)
+  //   research  a question about the world answered with no successful non-local tool result gets one step to look it up
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
   let map = "";
   // The end-of-run source check runs once per prompt.
   let sourcesChecked = false;
+  // Whether this prompt's run was already asked to look its answer up.
+  let researchAsked = false;
 
   // Compaction and branch summaries hold their text in `summary`, other messages in `content`.
   const textOf = (message: any) =>
@@ -584,6 +588,11 @@ export default async function (pi: ExtensionAPI) {
       return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-continue", content, display: false }] };
     }
     if (unanswered) return undefined;
+    if (OPTS.has("research") && !researchAsked) {
+      researchAsked = true;
+      const note = unresearched(ctx);
+      if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-research", content: note, display: true }] };
+    }
     if (!sourcesChecked) {
       sourcesChecked = true;
       const note = sourceCheck(ctx);
@@ -593,6 +602,20 @@ export default async function (pi: ExtensionAPI) {
     const edits = await clearResults(event.context.contextEntries, 0, new Set(), "after the answer");
     return edits.length ? { entries: edits } : undefined;
   });
+
+  /**
+   * A note for the model when the prompt asks about the world (see researchQuestion), a tool beyond Pi's local ones is
+   * available, and the run answered without a single successful result from one: an answer from memory.
+   */
+  const unresearched = (ctx: ExtensionContext) => {
+    if (!researchQuestion(lastPrompt)) return undefined;
+    const remote = pi.getActiveTools().filter((name) => !LOCAL_TOOLS.has(name));
+    if (!remote.length) return undefined;
+    const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
+    const run = branch.slice(branch.findLastIndex((m) => m.role === "user") + 1);
+    if (run.some((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))) return undefined;
+    return `Research check: this answer was given without any source. Look it up with ${remote.join(", ")}, then answer from what the sources say.`;
+  };
 
   /**
    * A note for the model when its answer, or a prose file it wrote in this run, cites a URL that appears only in failed
@@ -665,6 +688,7 @@ export default async function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     continued = false;
     sourcesChecked = false;
+    researchAsked = false;
     // Runs started by an extension's custom message have no prompt and keep the last one.
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;

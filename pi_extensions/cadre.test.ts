@@ -45,6 +45,7 @@ function fakePi() {
     handlers: {} as Record<string, Function>,
     thinking: [] as string[],
     models: [] as any[],
+    activeTools: ["read", "bash", "edit", "write"],
   };
   const pi = {
     registerProvider: (name: string, config: unknown) => (calls.providers[name] = config),
@@ -53,6 +54,7 @@ function fakePi() {
     on: (event: string, handler: Function) => (calls.handlers[event] = handler),
     setThinkingLevel: (level: string) => calls.thinking.push(level),
     setModel: async (model: unknown) => (calls.models.push(model), true),
+    getActiveTools: () => calls.activeTools,
   };
   return { pi, calls };
 }
@@ -780,6 +782,40 @@ test("with claims, a value no source supports gets one corrective step naming it
     assert.match(note.content, /correct it from a source, show how it was computed from one, or remove it/);
     const right = await settle(build("| First iPhone | 2007 |", 'Done. I followed "Emit ONLY code inside markdown blocks with exact language tags."'));
     assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
+
+test("with research, a question about the world answered without any source gets one step asking for a search", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "research";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const settle = async (prompt: string, run: any[], tools: string[]) => {
+      calls.activeTools = tools;
+      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+      const { session } = realSession([{ role: "user", content: prompt }, ...run]);
+      return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+    };
+    const whale = "How long can a sperm whale hold its breath while diving on average?";
+    const web = ["read", "bash", "edit", "write", "web_search", "fetch_content"];
+    const fromMemory = await settle(whale, [answer("About 3 to 4 minutes.")], web);
+    assert.equal(fromMemory.continue, true);
+    const [note] = fromMemory.entries;
+    assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-research"]);
+    assert.match(note.content, /without any source/);
+    assert.match(note.content, /web_search, fetch_content/);
+    const searched = [toolCall("s1", "web_search", { query: "sperm whale dive" }), toolResult("s1", "web_search", "Dives last 45 to 60 minutes."), answer("About 45 minutes.")];
+    assert.equal((await settle(whale, searched, web))?.continue, undefined, "a run that fetched a source passes");
+    const failed = [toolCall("s1", "web_search", { query: "x" }), { ...toolResult("s1", "web_search", "Error: 429"), isError: true }, answer("About 3 minutes.")];
+    assert.equal((await settle(whale, failed, web)).entries[0].customType, "cadre-research", "a failed search is no source");
+    assert.equal((await settle(whale, [answer("About 3 minutes.")], ["read", "bash"]))?.continue, undefined, "no tool to search with");
+    const local = "What does Inventory.available in inventory/store.py return?";
+    assert.equal((await settle(local, [answer("Stock minus reservations.")], web))?.continue, undefined, "questions about local code");
   } finally {
     if (saved === undefined) delete process.env.CADRE_OPTS;
     else process.env.CADRE_OPTS = saved;
