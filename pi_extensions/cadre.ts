@@ -349,6 +349,7 @@ export default async function (pi: ExtensionAPI) {
   //   hint      a research question gets a hidden message telling the model to search first
   //   tools     a research question gets only RESEARCH_TOOLS for its run
   //   recall    passages of cleared web results that match the task come back with each request
+  //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
 
@@ -504,7 +505,11 @@ export default async function (pi: ExtensionAPI) {
       savedTools = pi.getActiveTools();
       pi.setActiveTools(savedTools.filter((name) => RESEARCH_TOOLS.includes(name)));
     }
-    if (thinkingMode === "auto") pi.setThinkingLevel(REASONING_PROMPT.test(event.prompt) && !(research && OPTS.has("hint")) ? "medium" : "off");
+    if (thinkingMode === "auto") {
+      const reasoning = REASONING_PROMPT.test(event.prompt) && !(research && OPTS.has("hint"));
+      // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts.
+      pi.setThinkingLevel(OPTS.has("think") ? (reasoning ? "high" : "low") : reasoning ? "medium" : "off");
+    }
     if (research && OPTS.has("hint")) {
       const content = "This is a research question. Search the web before answering, and answer from what the sources say.";
       return { message: { customType: "cadre-research", content, display: false } };
@@ -514,12 +519,27 @@ export default async function (pi: ExtensionAPI) {
 
   // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
   // that compaction removed from context is restored in one message after the compaction summary.
-  // Passages of cleared web results that match the task come back with each request (see withRecall).
+  // Before each request to a local model: reasoning from earlier steps leaves (Spark's template renders all of it, so
+  // with thinking on it would fill the window step by step), and passages of cleared web results that match the task
+  // come back (see withRecall). The session keeps everything.
   pi.on("context", async (event, ctx) => {
-    if (!OPTS.has("recall")) return undefined;
-    const messages = withRecall(event.messages, ctx);
-    return messages ? { messages } : undefined;
+    if (ctx.model?.provider !== PROVIDER) return undefined;
+    let messages = withoutEarlierReasoning(event.messages);
+    if (OPTS.has("recall")) messages = withRecall(messages, ctx) ?? messages;
+    return messages === event.messages ? undefined : { messages };
   });
+
+  /** `messages` with thinking blocks removed from every assistant message but the last; the same array if none had any. */
+  const withoutEarlierReasoning = (messages: any[]) => {
+    const last = messages.findLastIndex((m) => m.role === "assistant");
+    let changed = false;
+    const out = messages.map((m, i) => {
+      if (m.role !== "assistant" || i === last || !m.content?.some((b: any) => b.type === "thinking")) return m;
+      changed = true;
+      return { ...m, content: m.content.filter((b: any) => b.type !== "thinking") };
+    });
+    return changed ? out : messages;
+  };
 
   /**
    * An assistant tool call and its result carrying `text`, for context added by the extension: text that came from tool
@@ -538,7 +558,7 @@ export default async function (pi: ExtensionAPI) {
    * inside the result each came from, so a passage keeps its place and its standing as tool output. Passages of results
    * that compaction removed go in one recall tool result after the compaction summary. Undefined when nothing matches.
    */
-  const withRecall = (messages: readonly any[], ctx: ExtensionContext) => {
+  const withRecall = (messages: any[], ctx: ExtensionContext) => {
     const shown = new Map<string, string>();
     for (const m of messages) if (m.role === "toolResult") shown.set(m.toolCallId, textOf(m));
     const branch = ctx.sessionManager.getBranch().flatMap((entry: any) => (entry.type === "message" ? [entry.message] : []));

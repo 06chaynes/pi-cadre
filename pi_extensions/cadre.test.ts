@@ -578,3 +578,41 @@ test("with recall, passages of a result that compaction removed come back right 
     else process.env.CADRE_OPTS = saved;
   }
 });
+
+test("reasoning from earlier steps leaves the request; the latest step keeps its own", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const think = (id: string, thinking: string) => ({ ...toolCall(id, "read", { path: "a.py" }), content: [{ type: "thinking", thinking }, { type: "toolCall", id, name: "read", arguments: { path: "a.py" } }] });
+  const { session } = realSession([
+    { role: "user", content: "Fix the bug" },
+    think("c1", "STEP-ONE reasoning"),
+    toolResult("c1", "read", "x = 1"),
+    think("c2", "STEP-TWO reasoning"),
+    toolResult("c2", "read", "y = 2"),
+  ]);
+  const messages = session.buildSessionContext().messages;
+  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  const text = JSON.stringify(result.messages);
+  assert.doesNotMatch(text, /STEP-ONE reasoning/);
+  assert.match(text, /STEP-TWO reasoning/);
+  assert.equal(result.messages[1].content.length, 1, "the earlier step keeps its tool call");
+  assert.match(JSON.stringify(session.buildSessionContext().messages), /STEP-ONE reasoning/, "the session itself is unchanged");
+});
+
+test("with think, auto thinking defaults to low and uses high for reasoning prompts", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "think";
+  try {
+    serveProps({});
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    for (const prompt of ["Review store.py for edge cases", "Add a restock_report method", "Research twelve facts"]) {
+      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    }
+    assert.deepEqual(calls.thinking, ["high", "low", "low"]);
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
