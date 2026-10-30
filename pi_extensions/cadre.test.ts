@@ -774,11 +774,6 @@ test("with map, the system message lists the project's files", async () => {
     await calls.handlers["context_with_system"]({ messages: [system] });
     assert.match(system.content, /Project files \(paths relative to the working directory\):/);
     assert.match(system.content, /pi_extensions\/router\.ts/);
-    await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "What does `chooseModel` return?" }, uiContext(true).ctx);
-    const next = { role: "system", content: "Pi system prompt" };
-    await calls.handlers["context_with_system"]({ messages: [next] });
-    assert.match(next.content, /Names in the request, where they are defined:\n`chooseModel`: /);
-    assert.match(next.content, /pi_extensions\/router\.ts:\d+: export function chooseModel\(prompt: string\)/);
   } finally {
     if (saved === undefined) delete process.env.CADRE_OPTS;
     else process.env.CADRE_OPTS = saved;

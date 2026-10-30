@@ -33,7 +33,6 @@ import { guardReason } from "./guard.ts";
 import { routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
-import { namedSymbols } from "./symbols.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
@@ -68,8 +67,6 @@ const CLEAR_KEEP_CHARS = 1000;
 const EXTRACT_BUDGET_CHARS = 12000;
 // Most characters of the project file map in the system message (see projectmap.ts).
 const MAP_MAX_CHARS = 2000;
-// Most characters of the definitions of names in the request (see symbols.ts), added with the map.
-const NAMES_MAX_CHARS = 1500;
 
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
@@ -399,7 +396,7 @@ export default async function (pi: ExtensionAPI) {
   //   continue  if a run ends without an answer, continue it once
   //   recall    passages of cleared web results that match the task come back with each request
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
-  //   map       the system message lists the project's files and where names in the request are defined
+  //   map       the system message lists the project's files (see projectmap.ts)
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
@@ -622,7 +619,7 @@ export default async function (pi: ExtensionAPI) {
     // Runs started by an extension's custom message have no prompt and keep the last one.
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;
-    map = OPTS.has("map") ? [projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS), namedSymbols(ctx.cwd, event.prompt, NAMES_MAX_CHARS)].filter(Boolean).join("\n\n") : "";
+    map = OPTS.has("map") ? projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS) : "";
     if (thinkingMode === "auto") {
       const reasoning = REASONING_PROMPT.test(event.prompt);
       // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts.
