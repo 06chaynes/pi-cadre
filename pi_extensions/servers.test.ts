@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { SERVERS, modelConfigs, openLog, serverArgs, secondSlot } from "./servers.ts";
+import { SERVERS, modelConfigs, openLog, serverArgs } from "./servers.ts";
 
 test("models use the detected per-slot context", () => {
   const [spark, lfm3] = modelConfigs({ spark: 131072, lfm3: 8192 });
@@ -64,16 +64,4 @@ test("logs go to a private directory and are never written through a symlink", (
   symlinkSync(victim, join(dir, "pi-cadre-lfm3.log"));
   if (process.platform === "win32") return t.skip("O_NOFOLLOW is POSIX-only");
   assert.throws(() => openLog(dir, "lfm3"), /ELOOP|EMLINK/);
-});
-
-test("the second slot can hold another small model, each with its own template settings", () => {
-  assert.equal(secondSlot(undefined).id, "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M");
-  const phi = secondSlot("phi4-mini");
-  assert.equal(phi.id, "unsloth/Phi-4-mini-instruct-GGUF:Q4_K_M");
-  assert.equal(phi.reasoning, false, "Phi-4-mini has no thinking mode");
-  assert.deepEqual(phi.chatTemplateKwargs, {});
-  const qwen = secondSlot("qwen3-1.7b");
-  assert.equal(qwen.id, "unsloth/Qwen3-1.7B-GGUF:Q4_K_M");
-  assert.ok("enable_thinking" in qwen.chatTemplateKwargs);
-  assert.throws(() => secondSlot("gpt-9"), /Unknown second model "gpt-9"; known: lfm3, phi4-mini, qwen3-1.7b/);
 });

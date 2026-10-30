@@ -10,22 +10,6 @@ import { join } from "node:path";
 export const HOST = "127.0.0.1";
 const THINKING_ENABLED = { $var: "thinking.enabled" };
 
-// EXPERIMENT ONLY (decided before release): small models that can fill the second slot, chosen with
-// CADRE_SECOND_MODEL. Each keeps the slot's port and pool; template settings and thinking support differ.
-const SECOND_MODELS = {
-  lfm3: { id: "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M", name: "LFM3-1.7B", reasoning: true, chatTemplateKwargs: { enable_thinking: THINKING_ENABLED } },
-  "phi4-mini": { id: "unsloth/Phi-4-mini-instruct-GGUF:Q4_K_M", name: "Phi-4-mini-instruct", reasoning: false, chatTemplateKwargs: {} },
-  "qwen3-1.7b": { id: "unsloth/Qwen3-1.7B-GGUF:Q4_K_M", name: "Qwen3-1.7B", reasoning: true, chatTemplateKwargs: { enable_thinking: THINKING_ENABLED } },
-};
-
-/** The second-slot model named `name` (LFM3 when unset), on port 8081 with the slot's default pool. */
-export function secondSlot(name: string | undefined) {
-  const key = name ?? "lfm3";
-  if (!(key in SECOND_MODELS)) throw new Error(`Unknown second model "${key}"; known: ${Object.keys(SECOND_MODELS).join(", ")}`);
-  const model = SECOND_MODELS[key as keyof typeof SECOND_MODELS];
-  return { ...model, port: 8081, ctxSize: 65536, parallel: 4, modelEnv: "LFM3_MODEL", thinkingLevelMap: undefined };
-}
-
 export const SERVERS = {
   spark: {
     id: "XHToken/Spark-X2.6-4B-GGUF:Q4_K_M",
@@ -38,7 +22,16 @@ export const SERVERS = {
     chatTemplateKwargs: { enable_thinking: THINKING_ENABLED, reasoning_effort: { $var: "thinking.effort" } },
     thinkingLevelMap: { minimal: "low", low: "low", medium: "high", high: "high" },
   },
-  lfm3: secondSlot(process.env.CADRE_SECOND_MODEL),
+  lfm3: {
+    id: "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M",
+    name: "LFM3-1.7B",
+    port: 8081,
+    ctxSize: 65536,
+    parallel: 4,
+    modelEnv: "LFM3_MODEL",
+    chatTemplateKwargs: { enable_thinking: THINKING_ENABLED },
+    thinkingLevelMap: undefined,
+  },
 } as const;
 export type ServerKey = keyof typeof SERVERS;
 export const SERVER_KEYS = Object.keys(SERVERS) as ServerKey[];
@@ -75,7 +68,7 @@ export function modelConfigs(contexts: Contexts) {
       baseUrl: `${serverUrl(key)}/v1`,
       input: ["text" as const],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      reasoning: "reasoning" in server ? server.reasoning : true,
+      reasoning: true,
       contextWindow: window,
       maxTokens: Math.min(8192, Math.floor(window / 4)),
       compat: { thinkingFormat: "chat-template" as const, chatTemplateKwargs: server.chatTemplateKwargs },
