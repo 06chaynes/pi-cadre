@@ -26,13 +26,13 @@ PORTS = {"spark": 8080, "lfm3": 8081}
 
 # number: (MODEL, CTX_SIZE, PARALLEL_SLOTS, label)
 PROFILES = {
-    "1": ("dual", None, None, "Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (16 slots x 2k)"),
+    "1": ("dual", None, None, "Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (4 slots x 16k), routed per prompt"),
     "2": ("spark", 65536, 8, "Spark, 8 slots x 8k"),
     "3": ("spark", 32768, 16, "Spark, 16 slots x 2k"),
     "4": ("spark", 131072, 4, "Spark, 4 slots x 32k"),
     "5": ("spark", 262144, 2, "Spark, 2 slots x 128k"),
     "6": ("spark", 1048576, 1, "Spark, 1 slot x 1M"),
-    "7": ("lfm3", 32768, 16, "LFM3, 16 slots x 2k"),
+    "7": ("lfm3", 65536, 4, "LFM3, 4 slots x 16k"),
     "8": ("lfm3", 65536, 8, "LFM3, 8 slots x 8k"),
     "9": ("lfm3", 262144, 1, "LFM3, 1 slot x 256k"),
 }
@@ -139,7 +139,7 @@ class SetupWizard:
         model = profile[0]
         ollama = {"name": "Ollama (local)", "baseUrl": "http://127.0.0.1:11434/v1", "api": "openai-completions", "apiKey": "none"}
         ollama_model = {"id": "lfm3:latest", "name": "LFM3-1.7B (Ollama)", "contextWindow": 8192, "maxTokens": 4096, "reasoning": True}
-        default = {"ollama": ("ollama", "lfm3:latest"), "lfm3": ("llama-cpp", LFM3_ID)}.get(model, ("llama-cpp", SPARK_ID))
+        default = {"ollama": ("ollama", "lfm3:latest"), "dual": ("llama-cpp", "cadre"), "lfm3": ("llama-cpp", LFM3_ID)}.get(model, ("llama-cpp", SPARK_ID))
         old_extension = str(ROOT / "pi_extensions" / "lfm3_agent_extension.ts")
 
         def update(name, change):

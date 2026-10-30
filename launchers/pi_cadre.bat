@@ -1,5 +1,5 @@
 @echo off
-REM Starts Pi on the local llama-server model selected by MODEL in cadre_config.env (LFM3 for "lfm3", Spark otherwise).
+REM Starts Pi on the model selected by MODEL in cadre_config.env: the cadre router for "dual", LFM3 for "lfm3", Spark otherwise.
 REM Needs this repo installed as a Pi package (setup_wizard.py or pi install); its extension registers the llama-cpp provider.
 setlocal
 set "PROJECT_DIR=%~dp0.."
@@ -12,7 +12,10 @@ where pi >nul 2>nul || (
     exit /b 1
 )
 
-if /i "%MODEL%"=="lfm3" (
+if not defined MODEL set "MODEL=dual"
+if /i "%MODEL%"=="dual" (
+    pi --provider llama-cpp --model cadre %*
+) else if /i "%MODEL%"=="lfm3" (
     pi --provider llama-cpp --model LiquidAI/LFM3-1.7B-GGUF:Q4_K_M %*
 ) else (
     pi --provider llama-cpp --model XHToken/Spark-X2.6-4B-GGUF:Q4_K_M %*

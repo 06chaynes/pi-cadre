@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts Pi on the local llama-server model selected by MODEL in cadre_config.env (LFM3 for "lfm3", Spark otherwise).
+# Starts Pi on the model selected by MODEL in cadre_config.env: the cadre router for "dual", LFM3 for "lfm3", Spark otherwise.
 # Needs this repo installed as a Pi package (setup_wizard.py or pi install); its extension registers the llama-cpp provider.
 
 SELF="${BASH_SOURCE[0]}"
@@ -20,7 +20,8 @@ if ! command -v pi &> /dev/null; then
     exit 1
 fi
 
-if [ "$MODEL" = lfm3 ]; then
-    exec pi --provider llama-cpp --model LiquidAI/LFM3-1.7B-GGUF:Q4_K_M "$@"
-fi
-exec pi --provider llama-cpp --model XHToken/Spark-X2.6-4B-GGUF:Q4_K_M "$@"
+case ${MODEL:-dual} in
+    dual) exec pi --provider llama-cpp --model cadre "$@" ;;
+    lfm3) exec pi --provider llama-cpp --model LiquidAI/LFM3-1.7B-GGUF:Q4_K_M "$@" ;;
+    *) exec pi --provider llama-cpp --model XHToken/Spark-X2.6-4B-GGUF:Q4_K_M "$@" ;;
+esac

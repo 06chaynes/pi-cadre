@@ -1,6 +1,6 @@
 {
   "name": "pi-cadre",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Pi provider, per-task thinking, and model setup for small local models served by llama.cpp",
   "license": "MIT",
   "type": "module",
@@ -12,7 +12,8 @@
     "url": "git+https://github.com/06chaynes/pi-cadre.git"
   },
   "files": [
-    "pi_extensions/cadre.ts"
+    "pi_extensions/*.ts",
+    "!pi_extensions/*.test.ts"
   ],
   "pi": {
     "extensions": [

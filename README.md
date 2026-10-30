@@ -46,7 +46,11 @@ pi install npm:pi-cadre                       # published releases
 pi install git:github.com/06chaynes/pi-cadre    # latest main
 ```
 
-The extension registers the `llama-cpp` provider at startup. It reads each server's per-slot context from `/props` and uses the launcher default (Spark 32768, LFM3 2048) for a server that is not running yet. Thinking levels are sent as chat template kwargs: Spark accepts `low` and `high` effort, so Pi's `medium` maps to `high`.
+The extension registers the `llama-cpp` provider at startup. It reads each server's per-slot context from `/props` and uses the launcher default (Spark 32768, LFM3 16384) for a server that is not running yet. Thinking levels are sent as chat template kwargs: Spark accepts `low` and `high` effort, so Pi's `medium` maps to `high`.
+
+It also registers `llama-cpp/cadre`, a model that picks Spark or LFM3 for each prompt. LFM3 gets questions and single-spot edits (a docstring, a typo, a rename); Spark gets everything else, including anything that mentions tests, several steps, or a change to behavior. A turn stays on the model that started it, a failed LFM3 request retries on Spark, and prompts the router cannot classify go to Spark. Routing to LFM3 needs at least 8192 tokens per LFM3 slot.
+
+When Pi starts with a UI, the extension offers to start any server that is not running, and to switch to `cadre` when another provider's model is selected. With only the npm package installed, servers it starts use the launcher defaults, and `SPARK_MODEL` / `LFM3_MODEL` in the environment select local `.gguf` files or other Hugging Face IDs. They keep running after Pi exits, with logs in `~/.local/state/pi-cadre` (or `$XDG_STATE_HOME/pi-cadre`).
 
 Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
@@ -61,7 +65,7 @@ Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
 | `MODEL` | Server | Pi uses |
 |---|---|---|
-| `dual` | Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (16 slots x 2k) | Spark |
+| `dual` | Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (4 slots x 16k) | `cadre`, routed per prompt |
 | `spark` | Spark on 8080 | Spark |
 | `lfm3` | LFM3 on 8081 | LFM3 |
 | HF repo ID or `.gguf` path | that model on `PORT` (default 8080) | Spark entry on 8080 |
@@ -74,9 +78,10 @@ With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and r
 
 Pi commands added by the extension:
 
-- `/cadre-status`: health, model file, and per-slot context of both servers.
+- `/cadre-status`: health, model file, and per-slot context of both servers, and whether `cadre` can route to LFM3.
+- `/cadre-start`: starts the servers that are not running.
 - `/cadre-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, diagnosis, debugging, investigation, or review run with medium thinking, and all others run with thinking off.
-- `/cadre-guard on|off`: path guard, on by default. Blocks writes and edits outside the working directory, and reads, searches, and bash commands that reach `/` or your home directory outside the working directory. Bash commands are checked by the paths written in them, so it catches mistakes rather than acting as a sandbox.
+- `/cadre-guard on|off`: path guard, on by default. Writes and edits must stay inside the working directory. Reads, searches, and bash commands may also use system directories (`/usr`, `/etc`, `/opt`, and similar) but nothing else outside the working directory, including its parent, your home directory, and `/tmp`. Bash commands are checked by the paths written in them, so it catches mistakes rather than acting as a sandbox.
 
 ## Python client
 
@@ -124,7 +129,7 @@ Each task description in B and C states the fix. C passes when that exact text a
 | `setup_wizard.py`, `install.sh`, `install.bat` | Installer |
 | `cadre_config.env` | Server settings read by the launchers |
 | `launchers/` | Server and Pi launchers |
-| `pi_extensions/cadre.ts` | Pi extension |
+| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts` |
 | `llama_cpp_client.py` | llama-server client and routing policies |
 | `repo_indexer.py` | AST symbol scan and function slicing |
 | `benchmark_tasks.py` | Benchmark task data |

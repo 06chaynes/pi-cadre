@@ -32,7 +32,7 @@ if /i "%MODEL%"=="dual" (
 set "DEFAULTS=8080 32768 8"
 set "ID=%MODEL%"
 if /i "%MODEL%"=="lfm3" (
-    set "DEFAULTS=8081 32768 16"
+    set "DEFAULTS=8081 65536 4"
     set "ID=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M"
     if defined LFM3_MODEL set "ID=%LFM3_MODEL%"
 )
