@@ -565,6 +565,34 @@ export default async function (pi: ExtensionAPI) {
     return undefined;
   });
 
+  // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
+  // that compaction removed from context is restored in one message after the compaction summary.
+  pi.on("context", async (event, ctx) => {
+    const visible = new Set(
+      event.messages.flatMap((message: any) =>
+        message.role === "assistant" ? message.content.filter((b: any) => b.type === "toolCall" && b.name === NOTE_TOOL.name).map((b: any) => b.id) : [],
+      ),
+    );
+    const branch = ctx.sessionManager.getBranch().flatMap((entry: any) => (entry.type === "message" ? [entry.message] : []));
+    const rejected = new Set(branch.filter((m: any) => m.role === "toolResult" && m.isError).map((m: any) => m.toolCallId));
+    const latest = new Map<string, { id: string; topic: string; fact: string; source: string }>();
+    for (const message of branch) {
+      if (message.role !== "assistant") continue;
+      for (const block of message.content ?? []) {
+        if (block.type !== "toolCall" || block.name !== NOTE_TOOL.name || rejected.has(block.id)) continue;
+        const { topic = "", fact = "", source = "" } = block.arguments ?? {};
+        latest.set(String(topic).trim().toLowerCase(), { id: block.id, topic, fact, source });
+      }
+    }
+    const lost = [...latest.values()].filter((note) => !visible.has(note.id));
+    if (!lost.length) return undefined;
+    const text = ["Your notes from earlier in this task (restored after compaction):", ...lost.map((n) => `- ${n.topic}: ${n.fact} (source: ${n.source})`)].join("\n");
+    const at = event.messages.findIndex((m: any) => m.role !== "compactionSummary" && m.role !== "branchSummary");
+    const messages = [...event.messages];
+    messages.splice(at < 0 ? messages.length : at, 0, { role: "user", content: [{ type: "text", text }], timestamp: Date.now() } as any);
+    return { messages };
+  });
+
   pi.on("context_with_system", async (event) => {
     const system = event.messages?.[0];
     if (system?.role === "system" && typeof system.content === "string") {

@@ -567,3 +567,53 @@ test("a later note on the same topic marks the earlier one superseded", async ()
   assert.equal(seen[2], "Superseded by a later note on Tokyo population.");
   assert.equal(seen[4], "Noted.");
 });
+
+test("notes that compaction removed come back before the next request, latest per topic", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const note = (id: string, topic: string, fact: string) => toolCall(id, "note", { topic, fact, source: "web_search" });
+  const { session, ids } = realSession([
+    { role: "user", content: "Research twelve facts and write research.md" },
+    note("n1", "Largest prime", "2^136,279,841 - 1, found 2024, 41,024,320 digits"),
+    toolResult("n1", "note", "Noted."),
+    note("n2", "Whale dive", "up to 45 minutes"),
+    toolResult("n2", "note", "Noted."),
+    note("n3", "Whale dive", "around 90 minutes hunting underwater"),
+    toolResult("n3", "note", "Noted."),
+    toolCall("c1", "web_search", { query: "tokyo population" }),
+    toolResult("c1", "web_search", "Tokyo 14,192,184"),
+    note("n4", "Tokyo population", "14,192,184 (metropolis)"),
+    toolResult("n4", "note", "Noted."),
+  ]);
+  // Compaction keeps only the last search onward: the first three notes leave context.
+  session.appendCompaction("Turn context (split turn): researching twelve facts.", ids[7], 20_000);
+  const messages = session.buildSessionContext().messages;
+  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  const restored = result.messages.find((m: any) => m.role === "user" && JSON.stringify(m.content).includes("Your notes"));
+  assert.ok(restored, "notes message added");
+  const text = JSON.stringify(restored.content);
+  assert.match(text, /Largest prime: 2\^136,279,841 - 1, found 2024, 41,024,320 digits/);
+  assert.match(text, /Whale dive: around 90 minutes hunting underwater/);
+  assert.doesNotMatch(text, /up to 45 minutes/);
+  assert.doesNotMatch(text, /Tokyo population/, "a note still in context is not repeated");
+  assert.equal(result.messages.indexOf(restored), 1, "right after the compaction summary");
+
+  const { session: plain } = realSession([{ role: "user", content: "q" }, note("n1", "t", "f"), toolResult("n1", "note", "Noted.")]);
+  assert.equal(await calls.handlers["context"]({ type: "context", messages: plain.buildSessionContext().messages }, toolContext(plain)), undefined);
+});
+
+test("a rejected note is never restored", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const { session, ids } = realSession([
+    { role: "user", content: "Research Everest" },
+    toolCall("n1", "note", { topic: "Everest", fact: "7,749.21 m", source: "web_search" }),
+    { ...toolResult("n1", "note", "Not noted: 7,749.21 is not in any tool result in this session."), isError: true },
+    toolCall("c1", "web_search", { query: "q" }),
+    toolResult("c1", "web_search", "r"),
+  ]);
+  session.appendCompaction("summary", ids[3], 10_000);
+  assert.equal(await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session)), undefined);
+});
