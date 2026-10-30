@@ -16,7 +16,8 @@ const HEADING = "Project files (paths relative to the working directory):";
 /** Relative paths of the project's files: git's tracked and untracked-but-not-ignored files, else a directory walk. */
 function projectFiles(cwd: string): string[] {
   try {
-    const out = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd, encoding: "utf8", timeout: 3000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    // core.fsmonitor in a repository's own config names a command git would run; it stays off.
+    const out = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "--others", "--exclude-standard"], { cwd, encoding: "utf8", timeout: 3000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
     return out.split("\n").filter(Boolean).slice(0, MAX_FILES);
   } catch {
     const files: string[] = [];

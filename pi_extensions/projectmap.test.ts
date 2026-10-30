@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -43,4 +43,12 @@ test("a large project shows top-level directories with file counts, plus files t
   assert.match(map, /pkg0\/ \(100 files\)/);
   assert.match(map, /README\.md/);
   assert.match(map, /pkg2\/module_202\.py/);
+});
+
+test("a repository's own git config cannot run a command while the map is built", () => {
+  const dir = project(["a.txt"], "");
+  const marker = join(dir, "ran");
+  execFileSync("git", ["config", "core.fsmonitor", `touch ${marker}`], { cwd: dir });
+  projectMap(dir, "", 2000);
+  assert.equal(existsSync(marker), false, "core.fsmonitor ran");
 });
