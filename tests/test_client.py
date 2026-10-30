@@ -51,7 +51,7 @@ def test_syntax_error():
     assert syntax_error("    return x") is None
     assert syntax_error("x = 1\ny = 2") is None
     assert syntax_error("def (") is not None
-    assert syntax_error("    a = 1\n    b = (\n    c = 2").lineno == 2
+    assert syntax_error("    a = 1\n    b = = 2\n    c = 3").lineno == 2
 
 
 def test_resolve_model_falls_back_only_in_auto(monkeypatch):
