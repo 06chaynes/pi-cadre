@@ -1,26 +1,35 @@
 /**
- * Model routing for the "cadre" virtual model. LFM3 answers questions and makes single-spot edits; Spark does
- * everything else. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, but lost track
+ * Model routing for the "cadre" virtual model. LFM3 answers questions about local code and makes single-spot edits;
+ * Spark does everything else, including questions that may need web research. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, but lost track
  * of the working directory and damaged files on a multi-step feature, so anything multi-step goes to Spark.
  */
 
 const MAX_LFM3_PROMPT = 300;
-// English prose runs about 4 characters per token and code or JSON fewer; 3 overestimates both.
-export const CHARS_PER_TOKEN = 3;
 const QUESTION_START = /^\s*(what|where|which|who|when|why|how|does|do|is|are|can|could|explain|describe|show|list|find|summari[sz]e)\b/i;
 const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix|change|update|remove|delete|plan|design|review|diagnose|debug|investigate|tests?)\b/i;
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
 const MULTI_STEP = /\b(tests?|then|every|all|each|across|refactor|implement)\b/i;
+// A file name, a backticked or snake_case or camelCase identifier, or "this/the repo|code|function|...".
+const LOCAL_REFERENCE =
+  /[\w-]+\.(py|ts|tsx|js|jsx|md|json|toml|ya?ml|rs|go|java|c|h|cpp|sh|txt|cfg|ini)\b|`[^`]+`|\b[a-z0-9]+_[a-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\b/;
 
 export type ModelChoice = "spark" | "lfm3";
+
+/** True for a question that names no local code or file and asks for no change: it can only be answered by research. */
+export function isResearchQuestion(prompt: string): boolean {
+  const text = prompt.trim();
+  const question = QUESTION_START.test(text) || text.endsWith("?");
+  return question && !CHANGE.test(text) && !LOCAL_REFERENCE.test(text) && !SMALL_EDIT.test(text);
+}
 
 /** Picks the model for a user prompt. */
 export function chooseModel(prompt: string): ModelChoice {
   const text = prompt.trim();
   if (text.length > MAX_LFM3_PROMPT) return "spark";
   if (SMALL_EDIT.test(text) && !MULTI_STEP.test(text)) return "lfm3";
+  // Questions without a local reference may need research; LFM3 wrote poor search queries for those.
   const question = QUESTION_START.test(text) || text.endsWith("?");
-  return question && !CHANGE.test(text) ? "lfm3" : "spark";
+  return question && !CHANGE.test(text) && LOCAL_REFERENCE.test(text) ? "lfm3" : "spark";
 }
 
 /** Text of the last user message, with text blocks joined by newlines. */
@@ -34,41 +43,19 @@ export function promptText(messages: readonly any[]): string {
     .join("\n");
 }
 
-/** Upper estimate of the tokens in `messages`: text blocks by length, other blocks (tool calls, thinking) as JSON. */
-export function estimateTokens(messages: readonly any[]): number {
-  let chars = 0;
-  for (const message of messages) {
-    const content = message?.content;
-    if (typeof content === "string") {
-      chars += content.length;
-      continue;
-    }
-    for (const block of content ?? []) {
-      chars += typeof block?.text === "string" ? block.text.length : JSON.stringify(block).length;
-    }
-  }
-  return Math.ceil(chars / CHARS_PER_TOKEN);
-}
-
 interface RouteModels<M> {
   spark: M;
-  /** Undefined when LFM3 is offline or its slots are too small for Pi. */
+  /** Undefined when LFM3 is offline, its slots are too small for Pi, or this request's conversation does not fit. */
   lfm3?: M;
 }
 
 /**
- * Physical model and thinking level for one request. A turn stays on the model that started it unless the conversation
- * outgrows LFM3 (for example after a large tool result), a failed request retries on Spark, and requests outside the
- * agent loop (compaction summaries) go to Spark.
+ * Physical model and thinking level for one request. A turn stays on the model that started it unless LFM3 is not
+ * passed (the caller leaves it out when the conversation outgrows it), a failed request retries on Spark, and requests
+ * outside the agent loop (compaction summaries) go to Spark.
  */
-export function routeRequest<M extends { id: string; contextWindow: number; maxTokens: number }>(
-  request: any,
-  models: RouteModels<M>,
-) {
-  const { spark } = models;
-  // LFM3 takes a request only if the conversation, plus room for its reply, fits its context window.
-  const fits = models.lfm3 !== undefined && estimateTokens(request.messages ?? []) <= models.lfm3.contextWindow - models.lfm3.maxTokens;
-  const lfm3 = fits ? models.lfm3 : undefined;
+export function routeRequest<M extends { id: string }>(request: any, models: RouteModels<M>) {
+  const { spark, lfm3 } = models;
   const isLfm3 = (model?: { id: string }) => lfm3 !== undefined && model?.id === lfm3.id;
   switch (request.reason) {
     case "retry": {

@@ -28,3 +28,6 @@ models/
 
 # Benchmark outputs
 results/
+
+# npm dev dependencies (TypeScript, Pi types for the type check and tests)
+node_modules/

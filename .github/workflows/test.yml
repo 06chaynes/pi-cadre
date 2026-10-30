@@ -36,7 +36,9 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: node --test 'pi_extensions/*.test.ts'
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
 
   lint:
     runs-on: ubuntu-latest

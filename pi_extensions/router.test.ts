@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chooseModel, estimateTokens, promptText, routeRequest } from "./router.ts";
+import { chooseModel, promptText, routeRequest } from "./router.ts";
 
-test("questions and single-spot edits go to LFM3", () => {
+test("questions about local code and single-spot edits go to LFM3", () => {
   for (const prompt of [
     "What does Inventory.available in inventory/store.py return? Answer in one sentence.",
-    "Where is the reservation released?",
-    "Explain how reserve works",
+    "Where does `reserve` release the reservation?",
+    "Explain how this function works",
     "Why does test_commit_ships_reserved_units fail?",
     "Add a one-line docstring to the add method in inventory/store.py.",
     "Fix the typo in the README heading",
@@ -17,7 +17,18 @@ test("questions and single-spot edits go to LFM3", () => {
   }
 });
 
-test("multi-step and open-ended work goes to Spark", () => {
+test("questions that may need research go to Spark", () => {
+  // LFM3 searched for "Linux 1.0" when asked about the first Linux release and answered about the wrong release.
+  for (const prompt of [
+    "What was the first sentence in the release notes of the first release of linux?",
+    "What year was the largest prime number found so far?",
+    "How long can a sperm whale hold it's breath while diving on average?",
+  ]) {
+    assert.equal(chooseModel(prompt), "spark", prompt);
+  }
+});
+
+test("multi-step and open-ended work goes to Spark (as before)", () => {
   for (const prompt of [
     "The test test_commit_ships_reserved_units in tests/test_store.py fails. Diagnose the root cause, fix it in inventory/store.py, and run python3 -m pytest -q to confirm all tests pass.",
     "Add a method restock_report(self, threshold) to Inventory in inventory/store.py that returns a sorted list of SKUs whose available quantity is below threshold. Add tests for it in tests/test_store.py, then run python3 -m pytest -q.",
@@ -46,7 +57,7 @@ test("promptText reads the last user message in string or block form", () => {
 const spark = { id: "spark", contextWindow: 32768, maxTokens: 8192 } as any;
 const lfm3 = { id: "lfm3", contextWindow: 16384, maxTokens: 4096 } as any;
 const request = (extra: Record<string, unknown>) =>
-  ({ thinkingLevel: "medium", messages: [{ role: "user", content: "What does reserve do?" }], ...extra }) as any;
+  ({ thinkingLevel: "medium", messages: [{ role: "user", content: "What does `reserve` do?" }], ...extra }) as any;
 
 test("a user request picks a model from the prompt and keeps the selected thinking level", () => {
   assert.deepEqual(routeRequest(request({ reason: "user" }), { spark, lfm3 }), { model: lfm3, thinkingLevel: "medium" });
@@ -71,25 +82,4 @@ test("direct requests and an unavailable LFM3 go to Spark", () => {
   assert.equal(routeRequest(request({ reason: "user" }), { spark }).model, spark);
   const previous = { model: lfm3, thinkingLevel: "low" };
   assert.equal(routeRequest(request({ reason: "continuation", previous }), { spark }).model, spark);
-});
-
-// A web search result about 30,000 tokens long, as in the session that overflowed LFM3's 16k slot.
-const searchResult = { role: "toolResult", content: [{ type: "text", text: "Mersenne prime record table row. ".repeat(3000) }] };
-
-test("estimateTokens counts every message's text conservatively", () => {
-  assert.ok(estimateTokens([searchResult]) > 30000);
-  assert.ok(estimateTokens([{ role: "user", content: "What does reserve do?" }]) < 20);
-});
-
-test("a turn moves to Spark when its conversation no longer fits LFM3", () => {
-  const previous = { model: lfm3, thinkingLevel: "off" };
-  const messages = [{ role: "user", content: "What year was the largest prime found?" }, searchResult];
-  assert.equal(routeRequest(request({ reason: "continuation", previous, messages }), { spark, lfm3 }).model, spark);
-  const small = [{ role: "user", content: "What does reserve do?" }, { role: "toolResult", content: [{ type: "text", text: "def reserve(): ..." }] }];
-  assert.equal(routeRequest(request({ reason: "continuation", previous, messages: small }), { spark, lfm3 }).model, lfm3);
-});
-
-test("a question goes to Spark when the history is too long for LFM3", () => {
-  const messages = [searchResult, { role: "user", content: "What does reserve do?" }];
-  assert.equal(routeRequest(request({ reason: "user", messages }), { spark, lfm3 }).model, spark);
 });
