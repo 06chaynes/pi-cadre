@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Pi package (`pi install npm:pi-cadre`). The extension registers the `llama-cpp` provider with Spark-X2.6-4B (port 8080) and LFM3-1.7B (port 8081), sized from each server's per-slot context.
+- Pi package (`pi install npm:pi-cadre`). Tagged releases are staged on npm through trusted publishing and published after 2FA approval.
+- The extension registers the `llama-cpp` provider with Spark-X2.6-4B (port 8080) and LFM3-1.7B (port 8081), sized from each server's per-slot context.
 - Thinking levels are sent as chat template kwargs each model accepts. Pi's `medium` maps to Spark's `high`.
 - `/cadre-status` reports both servers. Auto thinking also covers debugging, investigation, and review prompts.
 

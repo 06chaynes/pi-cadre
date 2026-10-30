@@ -8,7 +8,7 @@ Pi coding agent + local llama.cpp models (Spark-X2.6-4B on port 8080, LFM3-1.7B 
 - `cadre_config.env`: single source of server settings. Read by every launcher in `launchers/`. `SPARK_MODEL` and `LFM3_MODEL` hold machine-specific model paths. Don't commit local values.
 - `launchers/start_llama_server.{sh,bat}`: `MODEL=dual|spark|lfm3|<HF id>|<.gguf>`. Each model always uses its own port: Spark 8080, LFM3 8081. Dual mode re-invokes the script once per model.
 - `launchers/pi_cadre.{sh,bat}`: starts Pi on the configured model.
-- `package.json`: makes the repo a Pi package. `files` limits the npm package to the extension. Releases: bump `version`, update `CHANGELOG.md`, push a `vX.Y.Z` tag; `.github/workflows/release.yml` publishes to npm via trusted publishing.
+- `package.json`: makes the repo a Pi package. `files` limits the npm package to the extension. Releases: bump `version`, update `CHANGELOG.md`, push a `vX.Y.Z` tag; `.github/workflows/release.yml` stages the release on npm via trusted publishing, and a maintainer approves it with 2FA.
 - `pi_extensions/cadre.ts`: registers the `llama-cpp` provider (per-slot context from `/props`, thinking as chat template kwargs), `/cadre-status`, `/cadre-thinking`, per-prompt thinking level, coding rules appended to the system message. Pi API docs are in the installed package's `docs/extensions.md` and `docs/custom-provider.md`.
 - `llama_cpp_client.py`: `MODELS` (ids, URLs), `AutoThinkingPolicy`, `AutoModelPolicy`, `LlamaCppClient`. `generate_code` holds the only copy of the Spark-chat vs LFM3-prefill logic.
 - `repo_indexer.py`: AST symbol scan and function slicing.

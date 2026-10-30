@@ -15,10 +15,15 @@ on:
           - dry-run
           - npm
 
-# Default to least-privilege. Only the npm publish job opts into id-token: write
+# Default to least-privilege. Only the npm job opts into id-token: write
 # for npm trusted publishing (OIDC).
 permissions:
   contents: read
+
+# One release at a time; a second tag waits instead of racing the first.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -26,9 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Verify tag matches package.json version
         # A manual run that targets npm must be dispatched from the release tag.
         if: github.event_name == 'push' || inputs.target == 'npm'
@@ -44,7 +52,7 @@ jobs:
         run: npm test
       - name: Pack
         run: npm pack
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
           path: "*.tgz"
@@ -58,13 +66,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
       - run: npm publish --dry-run --access public ./*.tgz
 
-  publish-npm:
-    name: Publish to npm
+  stage-npm:
+    # Stages the release on npm. It goes live only after a maintainer runs
+    # `npm stage approve <stage-id>` (or approves on npmjs.com) with 2FA.
+    name: Stage release on npm
     needs: build
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.target == 'npm')
     runs-on: ubuntu-latest
@@ -72,15 +83,22 @@ jobs:
       name: npm
       url: https://www.npmjs.com/package/pi-cadre
     permissions:
-      id-token: write
+      id-token: write # OIDC token that npm exchanges for a short-lived publish credential
     steps:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          package-manager-cache: false
+      - name: Require npm 11.15.0+ (trusted publishing 11.5.1, staged publishing 11.15.0)
+        run: |
+          node -e '
+            const [a, b] = process.argv[1].split(".").map(Number);
+            if (a < 11 || (a === 11 && b < 15)) { console.error(`::error::npm ${process.argv[1]} is older than 11.15.0`); process.exit(1); }
+          ' "$(npm --version)"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
-      - name: Publish via trusted publishing (OIDC)
-        # npm 11.5.1+ exchanges the GitHub OIDC token for a short-lived publish token; no NPM_TOKEN secret.
-        run: npm publish --access public ./*.tgz
+      - name: Stage via trusted publishing (OIDC)
+        # npm exchanges the GitHub OIDC token for a short-lived token; no NPM_TOKEN secret exists.
+        run: npm stage publish --access public ./*.tgz
