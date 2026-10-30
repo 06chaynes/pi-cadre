@@ -816,3 +816,13 @@ test("with descry, only its navigation tools stay active when descry's extension
     else process.env.CADRE_OPTS = saved;
   }
 });
+
+test("the system message states today's date, which Pi's own prompt does not", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const system = { role: "system", content: "Pi system prompt" };
+  await calls.handlers["context_with_system"]({ messages: [system] });
+  const today = new Date().toISOString().slice(0, 10);
+  assert.ok(system.content.includes(`Today's date is ${today}.`), system.content);
+});

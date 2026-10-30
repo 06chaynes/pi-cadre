@@ -749,7 +749,9 @@ export default async function (pi: ExtensionAPI) {
     const system = event.messages?.[0];
     if (system?.role === "system" && typeof system.content === "string") {
       const rules = OPTS.has("rules") ? AGENT_RULES : CODING_RULES;
-      system.content += "\n" + rules + (map ? "\n\n" + map : "");
+      // Pi's prompt has no date, so "latest" or "this year" otherwise means the model's training cutoff.
+      const today = `Today's date is ${new Date().toISOString().slice(0, 10)}.`;
+      system.content += "\n" + rules + "\n\n" + today + (map ? "\n\n" + map : "");
     }
   });
 }
