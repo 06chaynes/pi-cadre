@@ -1,9 +1,9 @@
 @echo off
-REM Starts llama-server using lfm3_config.env (see that file for MODEL values). Flags override the config.
+REM Starts llama-server using cadre_config.env (see that file for MODEL values). Flags override the config.
 setlocal
 set "PROJECT_DIR=%~dp0.."
-if exist "%PROJECT_DIR%\lfm3_config.env" (
-    for /f "usebackq eol=# tokens=1,* delims==" %%G in ("%PROJECT_DIR%\lfm3_config.env") do set "%%G=%%H"
+if exist "%PROJECT_DIR%\cadre_config.env" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%G in ("%PROJECT_DIR%\cadre_config.env") do set "%%G=%%H"
 )
 
 :args
@@ -37,7 +37,7 @@ if /i "%MODEL%"=="lfm3" (
     if defined LFM3_MODEL set "ID=%LFM3_MODEL%"
 )
 if /i "%MODEL%"=="spark" (
-    set "DEFAULTS=8080 65536 8"
+    set "DEFAULTS=8080 131072 4"
     set "ID=XHToken/Spark-X2.6-4B-GGUF:Q4_K_M"
     if defined SPARK_MODEL set "ID=%SPARK_MODEL%"
 )

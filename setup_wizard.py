@@ -2,8 +2,9 @@
 """
 Installs and configures the local Pi + llama.cpp (or Ollama) stack on macOS, Linux, and Windows.
 
-Steps: pick a backend, install Pi via npm if missing, choose a server profile (writes lfm3_config.env),
-register the models and the Pi extension in ~/.pi/agent (or $PI_CODING_AGENT_DIR), then check which servers are up.
+Steps: pick a backend, install Pi via npm if missing, choose a server profile (writes cadre_config.env),
+add this repo as a Pi package in ~/.pi/agent (or $PI_CODING_AGENT_DIR), then check which servers are up.
+The package's extension registers the llama-cpp provider itself; the Ollama provider is written to models.json.
 
 Usage: python3 setup_wizard.py [--unattended] [--backend llama.cpp|ollama] [--profile N] [--skip-pi] [--skip-model] [--dry-run]
 """
@@ -22,11 +23,10 @@ ROOT = Path(__file__).resolve().parent
 SPARK_ID = "XHToken/Spark-X2.6-4B-GGUF:Q4_K_M"
 LFM3_ID = "LiquidAI/LFM3-1.7B-GGUF:Q4_K_M"
 PORTS = {"spark": 8080, "lfm3": 8081}
-DEFAULT_POOLS = {"spark": (65536, 8), "lfm3": (32768, 16)}
 
 # number: (MODEL, CTX_SIZE, PARALLEL_SLOTS, label)
 PROFILES = {
-    "1": ("dual", None, None, "Spark on 8080 (8 slots x 8k) and LFM3 on 8081 (16 slots x 2k)"),
+    "1": ("dual", None, None, "Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (16 slots x 2k)"),
     "2": ("spark", 65536, 8, "Spark, 8 slots x 8k"),
     "3": ("spark", 32768, 16, "Spark, 16 slots x 2k"),
     "4": ("spark", 131072, 4, "Spark, 4 slots x 32k"),
@@ -86,12 +86,12 @@ class SetupWizard:
         self.check_servers(model)
 
         server = "start_ollama" if model == "ollama" else "start_llama_server"
-        start, pi = (rf"launchers\{server}.bat", r"launchers\pi_lfm3.bat") if platform.system() == "Windows" else (
-            f"./launchers/{server}.sh", "./launchers/pi_lfm3.sh")
+        start, pi = (rf"launchers\{server}.bat", r"launchers\pi_cadre.bat") if platform.system() == "Windows" else (
+            f"./launchers/{server}.sh", "./launchers/pi_cadre.sh")
         if model == "ollama":
             pi = "pi"
         print(f"\nNext: start the server with {start}, then start Pi with {pi}.")
-        print("In Pi, /lfm3-status shows backend health and /lfm3-thinking sets the thinking mode.")
+        print("In Pi, /cadre-status shows backend health and /cadre-thinking sets the thinking mode.")
 
     def install_llama_cpp(self):
         print(f"llama-server not found. Install: {LLAMA_INSTALL_HINTS.get(platform.system(), LLAMA_INSTALL_HINTS['Linux'])}")
@@ -111,7 +111,7 @@ class SetupWizard:
             subprocess.run(["npm", "install", "-g", "@earendil-works/pi-coding-agent"], check=True)
 
     def choose_profile(self) -> tuple:
-        """Writes the chosen profile into lfm3_config.env and returns it."""
+        """Writes the chosen profile into cadre_config.env and returns it."""
         for number, (_, _, _, label) in PROFILES.items():
             print(f"  {number}  {label}")
         number = self.args.profile or self.ask("Server profile", "1")
@@ -121,7 +121,7 @@ class SetupWizard:
             return profile
 
         values = {"MODEL": model, "CTX_SIZE": ctx or "", "PARALLEL_SLOTS": slots or "", "PORT": ""}
-        config = ROOT / "lfm3_config.env"
+        config = ROOT / "cadre_config.env"
         lines = [
             f"{key}={values[key]}" if (key := line.split("=", 1)[0]) in values else line
             for line in config.read_text().splitlines()
@@ -131,41 +131,16 @@ class SetupWizard:
         return profile
 
     def configure_pi(self, profile: tuple):
-        """Adds the llama-cpp and ollama providers to models.json, and sets the default model and extension in settings.json."""
-        model, ctx, slots, _ = profile
-        pools = dict(DEFAULT_POOLS)
-        if ctx:
-            pools[model] = (ctx, slots)
-
-        def llama_model(model_id, name, key):
-            ctx, slots = pools[key]
-            window = ctx // slots
-            return {
-                "id": model_id,
-                "name": name,
-                "baseUrl": f"http://127.0.0.1:{PORTS[key]}/v1",
-                "contextWindow": window,
-                "maxTokens": min(4096, window // 2),
-                "reasoning": True,
-            }
-
-        providers = {
-            "llama-cpp": {
-                "name": "llama.cpp (local)",
-                "api": "openai-completions",
-                "apiKey": "none",
-                "models": [llama_model(SPARK_ID, "Spark-X2.6-4B", "spark"), llama_model(LFM3_ID, "LFM3-1.7B", "lfm3")],
-            },
-            "ollama": {
-                "name": "Ollama (local)",
-                "baseUrl": "http://127.0.0.1:11434/v1",
-                "api": "openai-completions",
-                "apiKey": "none",
-                "models": [{"id": "lfm3:latest", "name": "LFM3-1.7B (Ollama)", "contextWindow": 8192, "maxTokens": 4096, "reasoning": True}],
-            },
-        }
+        """
+        Adds this repo to settings.json packages, sets the default model, and adds lfm3:latest to the Ollama
+        provider in models.json, keeping that provider's other models and settings. Removes the llama-cpp provider from models.json and the extension path from settings.json
+        that earlier versions wrote, since models.json entries would override the extension's registration.
+        """
+        model = profile[0]
+        ollama = {"name": "Ollama (local)", "baseUrl": "http://127.0.0.1:11434/v1", "api": "openai-completions", "apiKey": "none"}
+        ollama_model = {"id": "lfm3:latest", "name": "LFM3-1.7B (Ollama)", "contextWindow": 8192, "maxTokens": 4096, "reasoning": True}
         default = {"ollama": ("ollama", "lfm3:latest"), "lfm3": ("llama-cpp", LFM3_ID)}.get(model, ("llama-cpp", SPARK_ID))
-        extension = str(ROOT / "pi_extensions" / "lfm3_agent_extension.ts")
+        old_extension = str(ROOT / "pi_extensions" / "lfm3_agent_extension.ts")
 
         def update(name, change):
             path = self.pi_dir / name
@@ -177,12 +152,19 @@ class SetupWizard:
             print(f"{'Would update' if self.args.dry_run else 'Updated'} {path}")
 
         def models(data):
-            data.setdefault("providers", {}).update(providers)
+            providers = data.setdefault("providers", {})
+            providers.pop("llama-cpp", None)
+            provider = {**ollama, **providers.get("ollama", {})}
+            others = [m for m in provider.get("models", []) if m.get("id") != ollama_model["id"]]
+            provider["models"] = others + [ollama_model]
+            providers["ollama"] = provider
 
         def settings(data):
             data["defaultProvider"], data["defaultModel"] = default
-            if extension not in data.setdefault("extensions", []):
-                data["extensions"].append(extension)
+            if old_extension in data.get("extensions", []):
+                data["extensions"].remove(old_extension)
+            if str(ROOT) not in data.setdefault("packages", []):
+                data["packages"].append(str(ROOT))
 
         update("models.json", models)
         update("settings.json", settings)

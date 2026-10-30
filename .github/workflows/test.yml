@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Default to least-privilege; jobs that need more must opt in explicitly.
+permissions:
+  contents: read
+
 jobs:
   pytest:
     strategy:
@@ -19,6 +23,15 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install pytest
       - run: python -m pytest -q
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: node --test 'pi_extensions/*.test.ts'
 
   lint:
     runs-on: ubuntu-latest

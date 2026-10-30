@@ -1,4 +1,4 @@
-# pi-lfm3
+# pi-cadre
 
 Runs the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) against local GGUF models served by `llama.cpp`:
 
@@ -36,8 +36,17 @@ The wizard:
 
 1. Asks for a backend: llama.cpp (default) or Ollama.
 2. Installs Pi with npm if it is missing.
-3. Asks for a server profile and writes it to `lfm3_config.env`.
-4. Registers both models and `pi_extensions/lfm3_agent_extension.ts` in `~/.pi/agent/models.json` and `settings.json`. `PI_CODING_AGENT_DIR` overrides the directory.
+3. Asks for a server profile and writes it to `cadre_config.env`.
+4. Adds this repo as a Pi package in `~/.pi/agent/settings.json` and adds `lfm3:latest` to the Ollama provider in `models.json`, keeping its other models. It removes the `llama-cpp` provider that earlier versions wrote to `models.json`, because that entry would override the extension's. `PI_CODING_AGENT_DIR` overrides the directory.
+
+To add only the Pi extension, without the wizard:
+
+```bash
+pi install npm:pi-cadre                       # published releases
+pi install git:github.com/06chaynes/pi-cadre    # latest main
+```
+
+The extension registers the `llama-cpp` provider at startup. It reads each server's per-slot context from `/props` and uses the launcher default (Spark 32768, LFM3 2048) for a server that is not running yet. Thinking levels are sent as chat template kwargs: Spark accepts `low` and `high` effort, so Pi's `medium` maps to `high`.
 
 Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
@@ -45,14 +54,14 @@ Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
 ```bash
 ./launchers/start_llama_server.sh       # Windows: launchers\start_llama_server.bat
-./launchers/pi_lfm3.sh                  # Windows: launchers\pi_lfm3.bat; ./pi-lfm3 is a shortcut
+./launchers/pi_cadre.sh                  # Windows: launchers\pi_cadre.bat; ./pi-cadre is a shortcut
 ```
 
-`MODEL` in `lfm3_config.env` controls both launchers:
+`MODEL` in `cadre_config.env` controls both launchers:
 
 | `MODEL` | Server | Pi uses |
 |---|---|---|
-| `dual` | Spark on 8080 and LFM3 on 8081 | Spark |
+| `dual` | Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (16 slots x 2k) | Spark |
 | `spark` | Spark on 8080 | Spark |
 | `lfm3` | LFM3 on 8081 | LFM3 |
 | HF repo ID or `.gguf` path | that model on `PORT` (default 8080) | Spark entry on 8080 |
@@ -65,8 +74,8 @@ With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and r
 
 Pi commands added by the extension:
 
-- `/lfm3-status`: backend health, loaded model, and context size.
-- `/lfm3-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, or diagnosis run with medium thinking, and all others run with thinking off.
+- `/cadre-status`: health, model file, and per-slot context of both servers.
+- `/cadre-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, diagnosis, debugging, investigation, or review run with medium thinking, and all others run with thinking off.
 
 ## Python client
 
@@ -82,9 +91,10 @@ Pi commands added by the extension:
 ```bash
 pip install pytest
 python3 -m pytest
+node --test 'pi_extensions/*.test.ts'   # Node 22.6+
 ```
 
-The tests need no model server. They cover the routing policies, client request construction, AST helpers, the wizard's config writing, and the shell launchers (using stub binaries). CI runs them on Linux, macOS, and Windows (`.github/workflows/test.yml`).
+The tests need no model server. They cover the routing policies, client request construction, AST helpers, the wizard's config writing, the shell launchers (using stub binaries), and the extension's provider registration. CI runs them on Linux, macOS, and Windows (`.github/workflows/test.yml`).
 
 ## Benchmarks
 
@@ -111,9 +121,9 @@ Each task description in B and C states the fix. C passes when that exact text a
 | Path | Purpose |
 |---|---|
 | `setup_wizard.py`, `install.sh`, `install.bat` | Installer |
-| `lfm3_config.env` | Server settings read by the launchers |
+| `cadre_config.env` | Server settings read by the launchers |
 | `launchers/` | Server and Pi launchers |
-| `pi_extensions/lfm3_agent_extension.ts` | Pi extension |
+| `pi_extensions/cadre.ts` | Pi extension |
 | `llama_cpp_client.py` | llama-server client and routing policies |
 | `repo_indexer.py` | AST symbol scan and function slicing |
 | `benchmark_tasks.py` | Benchmark task data |
@@ -123,3 +133,13 @@ Each task description in B and C states the fix. C passes when that exact text a
 ## License
 
 MIT
+
+## Releases
+
+The npm package contains only the Pi extension (`files` in `package.json`). To release:
+
+1. Bump `version` in `package.json` and move the `Unreleased` notes in `CHANGELOG.md` under the new version.
+2. Push a `vX.Y.Z` tag. `.github/workflows/release.yml` checks that the tag matches `package.json`, runs the extension tests, packs, and publishes to npm through trusted publishing (OIDC, no token secret).
+
+Run the workflow manually with target `dry-run` to check the package without publishing.
+

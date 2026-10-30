@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Starts llama-server using lfm3_config.env (see that file for MODEL values). Flags override the config;
+# Starts llama-server using cadre_config.env (see that file for MODEL values). Flags override the config;
 # arguments after -- go to llama-server.
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [ -f "$PROJECT_DIR/lfm3_config.env" ]; then
-    source "$PROJECT_DIR/lfm3_config.env"
+if [ -f "$PROJECT_DIR/cadre_config.env" ]; then
+    source "$PROJECT_DIR/cadre_config.env"
 fi
 
 usage() {
@@ -39,7 +39,7 @@ case ${MODEL:-dual} in
         wait
         exit
         ;;
-    spark) ID=${SPARK_MODEL:-XHToken/Spark-X2.6-4B-GGUF:Q4_K_M}; DEFAULTS=(8080 65536 8) ;;
+    spark) ID=${SPARK_MODEL:-XHToken/Spark-X2.6-4B-GGUF:Q4_K_M}; DEFAULTS=(8080 131072 4) ;;
     lfm3) ID=${LFM3_MODEL:-LiquidAI/LFM3-1.7B-GGUF:Q4_K_M}; DEFAULTS=(8081 32768 16) ;;
     *) ID=$MODEL; DEFAULTS=(8080 32768 8) ;;
 esac
