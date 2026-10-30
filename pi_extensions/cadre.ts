@@ -225,6 +225,26 @@ export default async function (pi: ExtensionAPI) {
   // Tool calls in the latest assistant response; their results arrive before the model reads any of them.
   let pendingCalls = 1;
 
+  /** Removes, from query-like arguments, numbers found in no user request or earlier tool result of the session. */
+  const neutralizeQueries = (input: Record<string, unknown>, ctx: ExtensionContext) => {
+    const keys = ["query", "queries", "q", "search_query", "searchQuery"].filter((key) => key in input);
+    if (!keys.length) return;
+    const known = (ctx.sessionManager.getBranch() as any[])
+      .flatMap((e) => (e.type === "message" && (e.message.role === "user" || e.message.role === "toolResult") ? [textOf(e.message)] : []))
+      .join(" ")
+      .replace(/,/g, "");
+    const clean = (query: string) =>
+      query
+        .replace(/\b\d[\d,.]*\d\b|\b\d{2,}\b/g, (n) => (known.includes(n.replace(/,/g, "")) ? n : ""))
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    for (const key of keys) {
+      const value = input[key];
+      if (typeof value === "string") input[key] = clean(value);
+      else if (Array.isArray(value)) input[key] = value.map((v) => (typeof v === "string" ? clean(v) : v));
+    }
+  };
+
   /** Tokens in a tool result on the densest tokenizer among the running servers, since either model may read it. */
   const resultTokens = async (text: string) => {
     const online = SERVER_KEYS.filter((key) => contexts[key] !== undefined);
@@ -315,6 +335,9 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    // EXPERIMENT: "neutral" removes numbers a search query adds that no request or earlier result contains (the model's
+    // own beliefs). With "1978" in an iPhone query, SearXNG returned pages about a 1978 date bug instead of 2007.
+    if (OPTS.has("neutral") && !LOCAL_TOOLS.has(event.toolName)) neutralizeQueries(event.input as Record<string, unknown>, ctx);
     if (!guardOn) return undefined;
     const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());
     return reason === undefined ? undefined : { block: true, reason };
@@ -388,6 +411,7 @@ export default async function (pi: ExtensionAPI) {
   //   continue  if a run ends without an answer, continue it once
   //   recall    passages of cleared web results that match the task come back with each request
   //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
+  //   neutral   numbers a search query adds that no request or earlier result contains are removed
   //   map       the system message lists the project's files (see projectmap.ts)
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;

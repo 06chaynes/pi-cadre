@@ -857,3 +857,33 @@ test("a hit-structured result is shortened by its hits whatever the tool is call
   for (const url of ["https://a.example/1", "https://b.example/2", "https://c.example/3"]) assert.ok(out.includes(url), url);
   assert.match(out, /^\[Result shortened from [\d,]+ characters: every hit's title and URL/);
 });
+
+test("with neutral, numbers a search query adds that no request or earlier result contains are removed", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "neutral";
+  try {
+    serveProps({});
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const { session } = realSession([
+      { role: "user", content: "Research: 1. The year the first iPhone was released. 2. Who won the 2024 Nobel Prize in Physics." },
+      toolCall("s0", "web_search", { query: "tungsten" }),
+      toolResult("s0", "web_search", "Tungsten melts at 3422 °C."),
+    ]);
+    const ctx = { ...uiContext(true).ctx, sessionManager: session };
+    // The real case: "1978" in the query pulled up pages about a 1978 date bug instead of the 2007 release.
+    const iphone = { toolName: "web_search", input: { query: "first iPhone release year 1978 Apple" } };
+    await calls.handlers["tool_call"](iphone, ctx);
+    assert.equal(iphone.input.query, "first iPhone release year Apple");
+    // Numbers from the request (2024) or an earlier result (3422) stay; list form (pi-web-access) is handled too.
+    const kept = { toolName: "web_search", input: { queries: ["2024 Nobel Prize Physics", "tungsten 3422 melting point 1989"] } };
+    await calls.handlers["tool_call"](kept, ctx);
+    assert.deepEqual(kept.input.queries, ["2024 Nobel Prize Physics", "tungsten 3422 melting point"]);
+    const local = { toolName: "bash", input: { command: "grep -n 1978 notes.txt" } };
+    await calls.handlers["tool_call"](local, ctx);
+    assert.equal(local.input.command, "grep -n 1978 notes.txt");
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
