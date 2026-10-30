@@ -5,7 +5,7 @@
  * written in them, so the guard catches mistakes rather than enforcing a sandbox.
  */
 
-import { lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
@@ -81,8 +81,63 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
   const outside = paths
     .map((path) => physicalPath(path, realCwd))
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
-  return outside === undefined
-    ? undefined
-    : `${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
-        "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
+  if (outside === undefined) return undefined;
+  const reason =
+    `${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
+    "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
+  // A blocked search for a name gets the project's files with that name, found here without running the command.
+  const found = toolName === "bash" && typeof input.command === "string" ? projectMatches(cwd, namePatterns(input.command)) : [];
+  return found.length ? `${reason} Project files matching: ${found.join(", ")}` : reason;
+}
+
+// Directories a project search skips, and its limits.
+const SKIP_DIRS = new Set([".git", "node_modules", ".venv", "venv", "target", "dist", "build", "__pycache__", ".next"]);
+const MAX_ENTRIES = 5000;
+const MAX_MATCHES = 10;
+
+const glob = (pattern: string, flags: string) =>
+  new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, flags);
+
+/**
+ * What a shell command searches for by name: find's -name, -iname, and -path patterns, and the file name of an
+ * absolute path argument (one with an extension).
+ */
+function namePatterns(command: string): { path: boolean; re: RegExp }[] {
+  const unquote = (word: string) => word.replace(/^['"]|['"]$/g, "");
+  const patterns: { path: boolean; re: RegExp }[] = [];
+  for (const m of command.matchAll(/-(i?name|i?path)\s+('[^']*'|"[^"]*"|\S+)/g)) {
+    patterns.push({ path: m[1].endsWith("path"), re: glob(unquote(m[2]), m[1].startsWith("i") ? "i" : "") });
+  }
+  if (!patterns.length) {
+    const name = command.match(/(?:^|\s)['"]?\/[^\s'"]*\/([^\s'"/]+\.[A-Za-z0-9]+)['"]?(?=\s|$)/)?.[1];
+    if (name) patterns.push({ path: false, re: glob(name, "") });
+  }
+  return patterns;
+}
+
+/** Project files (relative paths) matching every pattern, breadth first within the entry and match limits. */
+function projectMatches(cwd: string, patterns: { path: boolean; re: RegExp }[]): string[] {
+  if (!patterns.length) return [];
+  const found: string[] = [];
+  const queue = [""];
+  let seen = 0;
+  while (queue.length && seen < MAX_ENTRIES && found.length < MAX_MATCHES) {
+    const dir = queue.shift()!;
+    let entries;
+    try {
+      entries = readdirSync(join(cwd, dir), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (++seen > MAX_ENTRIES || found.length >= MAX_MATCHES) break;
+      const rel = dir ? `${dir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) queue.push(rel);
+      } else if (patterns.every((p) => p.re.test(p.path ? `./${rel}` : entry.name))) {
+        found.push(rel);
+      }
+    }
+  }
+  return found;
 }
