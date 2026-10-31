@@ -34,7 +34,7 @@ import { researchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
 import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
-import { withoutGuesses } from "./text.ts";
+import { guesses, withoutGuesses } from "./text.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
@@ -702,21 +702,30 @@ export default async function (pi: ExtensionAPI) {
     }
     if (OPTS.has("claims")) {
       const sessionId = ctx.sessionManager.getSessionId?.();
-      const evidence = branch
+      // A result does not support the numbers its own call guessed: that search went looking for them.
+      const knownFor = knownByCall(branch);
+      const argsOf = new Map<string, string>();
+      for (const m of branch) if (m.role === "assistant") for (const b of m.content ?? []) if (b.type === "toolCall") argsOf.set(b.id, JSON.stringify(b.arguments ?? {}));
+      const results = branch
         .filter((m) => m.role === "toolResult" && !m.isError)
-        .map((m) => (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m));
-      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...evidence];
+        .map((m) => ({
+          text: (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m),
+          guessed: guesses(argsOf.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
+        }));
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...results];
+      const evidence = results.map((r) => r.text);
       for (const [where, text] of produced) {
-        for (const { claim, passage } of unsupportedClaims(text, sources, evidence)) {
+        for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence)) {
           if (named.has(claim.value) || named.size >= MAX_CLAIMS_NAMED) continue;
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
-          lines.push(`${where}: ${claim.value} (in "${context}") appears in no source${passage ? `; closest source passage: "${passage}"` : ""}.`);
+          const why = circular ? "appears only in results of a search that already contained it, so no source confirms it" : "appears in no source";
+          lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage: "${passage}"` : ""}.`);
         }
       }
     }
     if (!lines.length) return undefined;
-    return `Source check:\n- ${lines.join("\n- ")}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it). Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
+    return `Source check:\n- ${lines.join("\n- ")}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it); for a value only your own search contained, search again without it. Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
   };
 
   pi.on("before_agent_start", async (event, ctx) => {

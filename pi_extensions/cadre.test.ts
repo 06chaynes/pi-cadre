@@ -840,6 +840,36 @@ test("with claims, a value no source supports gets one corrective step naming it
   }
 });
 
+test("with claims, a value found only through a search that already guessed it gets a corrective step that says so", async () => {
+  const saved = process.env.CADRE_OPTS;
+  process.env.CADRE_OPTS = "claims";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const prompt = "Research the year the first iPhone was released and write research.md.";
+    const settle = async (query: string) => {
+      const session = realSession([
+        { role: "user", content: prompt },
+        toolCall("s1", "web_search", { queries: [query] }),
+        toolResult("s1", "web_search", "My iPhone says it was purchased on April 1 1978; the 1978 date is a placeholder for AS IS iPhones."),
+        toolCall("w1", "write", { path: "research.md", content: "| First iPhone released | 1978 |\n" }),
+        toolResult("w1", "write", "Successfully wrote to research.md"),
+        answer("Done."),
+      ]).session;
+      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+      return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => "" });
+    };
+    const guessed = await settle("first iPhone release year 1978 Apple");
+    assert.equal(guessed.continue, true);
+    assert.match(guessed.entries[0].content, /research\.md: 1978 .* appears only in results of a search that already contained it/);
+    assert.equal((await settle("first iPhone release year"))?.continue, undefined, "found by a search that did not contain it");
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
+
 test("with research, a question about the world answered without any source gets one step asking for a search", async () => {
   const saved = process.env.CADRE_OPTS;
   process.env.CADRE_OPTS = "research";

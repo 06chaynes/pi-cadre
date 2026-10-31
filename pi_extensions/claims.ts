@@ -12,8 +12,16 @@ export interface Claim {
   context: string;
 }
 
+/**
+ * A text the answer may draw on. A tool result carries the numbers its own call guessed (see guesses in text.ts): those
+ * numbers in it do not count as support, since the search went looking for them.
+ */
+export type Source = string | { text: string; guessed: readonly string[] };
+
 export interface Unsupported {
   claim: Claim;
+  /** True for a number found only in sources whose search already contained it. */
+  circular?: boolean;
   /** The source passage closest to the claim's context, if any shares a word with it. */
   passage?: string;
 }
@@ -101,17 +109,25 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
  * Callers pass every text the answer may draw on as `sources` (tool results, saved originals, the user's messages) and
  * the retrieved material alone as `evidence`.
  */
-export function unsupportedClaims(answer: string, sources: readonly string[], evidence: readonly string[] = sources): Unsupported[] {
-  const sourceUrls = new Set(sources.flatMap((s) => (s.match(URL) ?? []).map(normUrl)));
-  const sourceText = normText(sources.join("\n"));
-  const numbers = sources.flatMap((s) => [...s.matchAll(SOURCE_NUMBER)].map((m) => ({ value: normNumber(m[0]), source: s, index: m.index! })));
+export function unsupportedClaims(answer: string, sources: readonly Source[], evidence: readonly string[] = sources.map(textOfSource)): Unsupported[] {
+  const texts = sources.map(textOfSource);
+  const sourceUrls = new Set(texts.flatMap((s) => (s.match(URL) ?? []).map(normUrl)));
+  const sourceText = normText(texts.join("\n"));
+  const numbers = sources.flatMap((src) => {
+    const s = textOfSource(src);
+    const guessed = new Set(typeof src === "string" ? [] : src.guessed.map(normNumber));
+    return [...s.matchAll(SOURCE_NUMBER)].map((m) => ({ value: normNumber(m[0]), source: s, index: m.index!, guessed }));
+  });
+  const circular = new Set<Claim>();
   const supported = (claim: Claim, rest: string) => {
     if (claim.kind === "url") return sourceUrls.has(normUrl(claim.value));
     if (claim.kind === "quote") return sourceText.includes(normText(claim.value).split(" ").slice(0, QUOTE_WORDS).join(" "));
     const scaled = SCALE.test(rest);
     const words = new Set(terms(claim.context).filter((t) => !/^\d+$/.test(t)));
-    return numbers.some(({ value, source, index }) => {
-      if (!sameNumber(claim.value, value, scaled)) return false;
+    const found = numbers.filter(({ value }) => sameNumber(claim.value, value, scaled));
+    const counted = found.filter(({ guessed }) => !guessed.has(claim.value));
+    if (found.length && !counted.length) circular.add(claim);
+    return counted.some(({ source, index }) => {
       if (!words.size) return true;
       const near = terms(source.slice(Math.max(0, index - NEAR_CHARS), index + NEAR_CHARS)).filter((t) => !/^\d+$/.test(t));
       return near.length < MIN_NEAR_WORDS || near.some((t) => [...words].some((w) => sameWord(w, t)));
@@ -125,8 +141,13 @@ export function unsupportedClaims(answer: string, sources: readonly string[], ev
     const scores = index.score(claim.context);
     let best = -1;
     for (let i = 0; i < scores.length; i++) if (scores[i].score > 0 && (best < 0 || scores[i].score > scores[best].score)) best = i;
-    return best < 0 ? { claim } : { claim, passage: passages[best].slice(0, PASSAGE_CHARS) };
+    const flag = circular.has(claim) ? { circular: true } : {};
+    return best < 0 ? { claim, ...flag } : { claim, ...flag, passage: passages[best].slice(0, PASSAGE_CHARS) };
   });
+}
+
+function textOfSource(source: Source): string {
+  return typeof source === "string" ? source : source.text;
 }
 
 /** The text after a claimed number in its context, where a scale word such as "million" would be. */

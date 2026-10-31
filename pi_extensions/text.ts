@@ -72,6 +72,13 @@ export function bm25(docs: readonly string[]) {
 // Numbers of two or more digits (with grouping or decimals): values an answer or a query may carry.
 const NUMBER = /(\s?)(\b\d[\d,.]*\d\b|\b\d{2,}\b)/g;
 
+/** The numbers in `text` (as written, digit grouping removed) that `known` does not contain: values the model supplied. */
+export function guesses(text: string, known: string): string[] {
+  const flat = known.replace(/,/g, "");
+  const found = [...text.matchAll(NUMBER)].map((m) => m[2].replace(/,/g, "")).filter((n) => !flat.includes(n));
+  return [...new Set(found)];
+}
+
 /**
  * `text` without the numbers that `known` (what the user said and tools returned before it was written) does not
  * contain: values the model supplied itself. Used so a search, and the ranking of what results keep, follow what is

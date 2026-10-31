@@ -79,3 +79,14 @@ test("an unsupported claim comes with the source passage closest to its context"
   assert.equal(u.claim.value, "1978");
   assert.match(u.passage ?? "", /June 29, 2007/);
 });
+
+test("a number found only in results of a search that already guessed it is unsupported, and says so", () => {
+  // The iPhone failure: the query carried the guess "1978", and the results that matched it were date-bug pages.
+  const answer = "| First iPhone | 1978 |";
+  const circular = { text: "My iPhone says it was purchased in 1978; the 1978 date is a placeholder.", guessed: ["1978"] };
+  const [u] = unsupportedClaims(answer, [circular]);
+  assert.equal(u.claim.value, "1978");
+  assert.equal(u.circular, true);
+  const independent = "The first iPhone was released in 1978 according to this (wrong) page.";
+  assert.deepEqual(unsupportedClaims(answer, [circular, independent]), [], "another source that did not search for it supports it");
+});
