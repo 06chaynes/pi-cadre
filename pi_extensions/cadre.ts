@@ -31,7 +31,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { guardReason } from "./guard.ts";
 import { researchQuestion, routeRequest } from "./router.ts";
-import { recall, taskQueries } from "./memory.ts";
+import { passages, recall, taskQueries } from "./memory.ts";
+import { itemFor, keepBest, rerankScores } from "./rerank.ts";
 import { projectMap } from "./projectmap.ts";
 import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
 import { guesses, withoutGuesses } from "./text.ts";
@@ -43,6 +44,8 @@ import { shortenHits, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
   type ServerKey,
+  HOST,
+  RERANKER,
   SERVER_KEYS,
   SERVERS,
   fetchProps,
@@ -67,6 +70,8 @@ const SYSTEM_ALLOWANCE = 4096;
 // older ones shrink to a one-line note.
 const CLEAR_MIN_CHARS = 2000;
 const CLEAR_KEEP_CHARS = 1000;
+// Passage size for reranking a cleared result (the size the clearing-budget measurement used).
+const RERANK_PASSAGE_CHARS = 500;
 const EXTRACT_BUDGET_CHARS = 12000;
 // Most characters of the project file map in the system message (see projectmap.ts).
 const MAP_MAX_CHARS = 2000;
@@ -436,6 +441,7 @@ export default async function (pi: ExtensionAPI) {
   //   map       the system message lists the project's files (see projectmap.ts)
   //   descry    with descry installed, the system message lists its symbols for the request (see descry.ts)
   //   claims    the end-of-run source check also names numbers, quotes and URLs no source supports (see claims.ts)
+  //   rerank    a cleared result keeps the passages a reranker scores highest for the request item (see rerank.ts)
   //   research  a question about the world answered with no successful non-local tool result gets one step to look it up
   const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
   let continued = false;
@@ -585,13 +591,23 @@ export default async function (pi: ExtensionAPI) {
         kept += tokens;
         continue;
       }
-      // Line matching keeps the answer more often than the hit-aware shortener at this budget (146 vs 133 of 255 answer-
-      // bearing results in the scored sessions), so clearing uses it for every kind of result.
-      const query = `${withoutGuesses(callArgs.get(message.toolCallId) ?? "", knownFor(message.toolCallId))} ${lastPrompt}`;
-      const extract =
+      const call = withoutGuesses(callArgs.get(message.toolCallId) ?? "", knownFor(message.toolCallId));
+      // With the reranker, the passages that best answer the request item this call serves stay (see rerank.ts);
+      // without it, line matching, which keeps the answer more often than the hit-aware shortener at this budget.
+      let extract: string | undefined;
+      if (OPTS.has("rerank")) {
+        const pieces = passages({ source: "", text }, RERANK_PASSAGE_CHARS).map((p) => p.text);
+        const scores = await rerankScores(`http://${HOST}:${RERANKER.port}`, itemFor(call, lastPrompt), pieces);
+        if (scores)
+          extract =
+            `[${name} result, ${size} characters, cleared from context ${reason}. ` +
+            `The passages that best answer the request are kept below; run ${name} again for the rest.]\n` +
+            keepBest(pieces, scores, CLEAR_KEEP_CHARS).join("\n");
+      }
+      extract ??=
         `[${name} result, ${size} characters, cleared from context ${reason}. ` +
         `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
-        shortenText(text, query, CLEAR_KEEP_CHARS);
+        shortenText(text, `${call} ${lastPrompt}`, CLEAR_KEEP_CHARS);
       const content = extractChars + extract.length <= EXTRACT_BUDGET_CHARS ? extract : bare;
       extractChars += content === extract ? extract.length : 0;
       edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content } });

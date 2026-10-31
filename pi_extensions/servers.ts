@@ -34,6 +34,10 @@ export const SERVERS = {
   },
 } as const;
 export type ServerKey = keyof typeof SERVERS;
+
+// EXPERIMENT (the rerank option): the reranker cadre ranks cleared results with (see rerank.ts), on its own
+// llama-server started with --embedding --pooling rank --reranking. Launchers, wizard and config follow if it is kept.
+export const RERANKER = { id: "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", port: 8082 } as const;
 export const SERVER_KEYS = Object.keys(SERVERS) as ServerKey[];
 export type Contexts = Partial<Record<ServerKey, number>>;
 

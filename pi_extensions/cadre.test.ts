@@ -528,6 +528,52 @@ test("a number the model guessed in its query does not change what a cleared sea
   assert.ok(guessed.length <= 1300, `${guessed.length} characters`);
 });
 
+test("with rerank, a cleared result keeps the passages the reranker scores highest for the request item, and falls back to line matching without it", async () => {
+  const saved = { opts: process.env.CADRE_OPTS, fetch: globalThis.fetch };
+  process.env.CADRE_OPTS = "clear,rerank";
+  try {
+    serveProps({ 8080: 32768, 8081: 16384 });
+    const { pi, calls } = fakePi();
+    await extension(pi as any);
+    const prompt = "Research each of these and write research.md:\n1. The melting point of tungsten.\n2. The year the first iPhone was released.";
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    // The answering passage shares one word with the item; word matching prefers the date-bug passages.
+    const filler = (i: number) => `Insurance producers sign in to access rating, underwriting guidelines and forms, page ${i}. ` + "More text. ".repeat(12);
+    const bug = "The 1978 purchase date on an Apple iPhone appears on AS IS units sold without the one-year warranty; first released year placeholder.";
+    const unveiling = "Development of the iPhone began in 2005 and continued in secrecy until its public unveiling at Macworld 2007.";
+    const page = [bug, ...[1, 2, 3, 4, 5, 6, 7, 8].map(filler), unveiling, bug.replace("1978", "1978 again"), ...[9, 10, 11].map(filler)].join("\n\n");
+    const run = () => {
+      const { session } = realSession([
+        { role: "user", content: prompt },
+        toolCall("c1", "web_search", { queries: ["first iPhone release year Apple"] }),
+        toolResult("c1", "web_search", page),
+        answer("Done."),
+      ]);
+      return calls.handlers["agent_before_settle"](boundary(session), sessionContext([])).then((r: any) => applyEdits(session, r)[2]);
+    };
+    const queries: string[] = [];
+    globalThis.fetch = (async (_url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      queries.push(body.query);
+      const results = body.documents.map((doc: string, index: number) => ({ index, relevance_score: doc.includes("Macworld 2007") ? 0.99 : doc.includes("1978") ? 0.5 : 0.01 }));
+      return new Response(JSON.stringify({ results }), { status: 200 });
+    }) as typeof fetch;
+    const ranked = await run();
+    assert.match(ranked, /unveiling at Macworld 2007/);
+    assert.match(ranked, /passages that best answer the request/);
+    assert.deepEqual(queries, ["The year the first iPhone was released."], "ranked against the item the call serves");
+    assert.ok(ranked.length <= 1300, `${ranked.length} characters`);
+    globalThis.fetch = (async () => {
+      throw new Error("connect ECONNREFUSED");
+    }) as typeof fetch;
+    assert.match(await run(), /Its opening and the lines matching its call and the request are kept below/, "line matching without the reranker");
+  } finally {
+    globalThis.fetch = saved.fetch;
+    if (saved.opts === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved.opts;
+  }
+});
+
 test("once kept extracts pass their budget, the oldest cleared results shrink to a one-line note", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
