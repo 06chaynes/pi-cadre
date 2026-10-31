@@ -54,6 +54,11 @@ test("code spans, code blocks and file paths are not claims", () => {
   assert.deepEqual(values("Written to /private/tmp/claude-501/365cb2b9-6b94/report.md and ./out/2024/run.txt"), []);
 });
 
+test("line numbers that point into files are positions in the code, not claims", () => {
+  assert.deepEqual(values("The loop lives in requests/sessions.py:159-210, and the limit is checked at line 190 (lines 237–243 rebuild auth; see lines 183-188 and 202)."), []);
+  assert.deepEqual(values("An airline 747 carries 416 passengers on a file.py-free route."), ["number:747", "number:416"]);
+});
+
 test("an answer may group digits with plain spaces", () => {
   assert.deepEqual(values("Light travels at 299 792 458 m/s, in 2024 12 labs agree."), ["number:299792458", "number:2024"]);
 });

@@ -37,6 +37,10 @@ const SOURCE_NUMBER = new RegExp(`(?<![\\d.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 // Code and file paths are the model's own material, not claims about sources.
 const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
 const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
+// Line numbers into files ("line 190", "lines 183-188 and 202", "sessions.py:159-210") are positions in the code, which
+// read results do not print, so like paths they are not claims about sources.
+const RANGE = "\\d+(?:\\s*[-–]\\s*\\d+)?";
+const LINE_REF = new RegExp(`\\blines?\\s+${RANGE}(?:\\s*(?:,|and)\\s*${RANGE})*|(?<=\\.\\w{1,5}):${RANGE}`, "gi");
 const QUOTE = /["“]([^"”\n]{12,300})["”]/g;
 const SCALE = /^\s*(thousand|million|billion|trillion|[kMB]\b)/;
 const UNIT_SIGN = /^\s?(%|°)/;
@@ -85,7 +89,7 @@ export function claimsOf(text: string): Claim[] {
     out.push({ kind, value, context: contextAt(text, index) });
   };
   const prose = blank(text, CODE);
-  const plain = blank(blank(prose, URL), PATH);
+  const plain = blank(blank(blank(prose, URL), PATH), LINE_REF);
   for (const m of plain.matchAll(ANSWER_NUMBER)) {
     const n = normNumber(m[0]);
     const after = plain.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
