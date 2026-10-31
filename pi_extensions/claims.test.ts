@@ -90,3 +90,9 @@ test("a number found only in results of a search that already guessed it is unsu
   const independent = "The first iPhone was released in 1978 according to this (wrong) page.";
   assert.deepEqual(unsupportedClaims(answer, [circular, independent]), [], "another source that did not search for it supports it");
 });
+
+test("a power written with ^ is supported by a source whose superscript formatting was lost (2^136,279,841 as 2136,279,841)", () => {
+  const answer = "The largest known prime is 2^136,279,841 − 1.";
+  assert.deepEqual(unsupportedClaims(answer, ["The largest known prime is 2136,279,841 − 1, found by GIMPS."]), []);
+  assert.equal(unsupportedClaims("It has 279,841 digits.", ["Prime number 2136,279,841 − 1 found."]).length, 1, "a short tail is not enough");
+});

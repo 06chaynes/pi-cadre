@@ -30,7 +30,9 @@ const URL = /https?:\/\/[^\s"'<>`|)\]]+/g;
 // Digit groups: commas, thin spaces and plain spaces (299 792 458). In answers a plain-space group must start with one
 // to three digits, so a year next to a count (2024 12) stays two numbers.
 const ANSWER_NUMBER = /(?<![\w.])(?:\d{1,3}(?:[,\u2009\u202f ]\d{3}(?!\d))+|\d+)(?:\.\d+)*/g;
-const SOURCE_NUMBER = /(?<![\d.])(?:\d{1,3}(?:[,\u2009\u202f ]\d{3}(?!\d))+|\d+)(?:\.\d+)*/g;
+// A source may also run a power's base into its exponent when superscript formatting is lost ("2^136,279,841" arrives
+// as "2136,279,841"), so a longer first group before comma groups is read as one number too.
+const SOURCE_NUMBER = /(?<![\d.])(?:\d{1,3}(?:[,\u2009\u202f ]\d{3}(?!\d))+|\d+(?:[,\u2009\u202f]\d{3}(?!\d))+|\d+)(?:\.\d+)*/g;
 // Code and file paths are the model's own material, not claims about sources.
 const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
 const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
@@ -96,6 +98,8 @@ const sameWord = (a: string, b: string) => a === b || (Math.min(a.length, b.leng
 /** Whether source value `s` is the claimed value `n`, or rounds to it where rounding is plain from the text. */
 function sameNumber(n: string, s: string, scaled: boolean): boolean {
   if (n === s) return true;
+  // A flattened power: the source number is the claim with its base (one or two digits) in front.
+  if (!n.includes(".") && n.length >= 6 && s.length > n.length && s.length - n.length <= 2 && s.endsWith(n)) return true;
   // A rounded claim: the source is more precise (has decimals) or the claim names a scale (14.2 million).
   if (!s.includes(".") && !scaled) return false;
   const d = n.includes(".") ? significant(n) : significant(n).replace(/0+$/, "");
