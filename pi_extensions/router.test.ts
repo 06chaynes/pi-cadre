@@ -125,3 +125,15 @@ test("researchQuestion is true for questions about the world and explicit resear
     assert.equal(researchQuestion(prompt), false, prompt);
   }
 });
+
+test("product names in camel case (iPhone, eBay, macOS) do not make a question local code; identifiers still do", () => {
+  // The real failure: "What year was the first iPhone released?" went to LFM3 as a local-code question, and LFM3 made
+  // 25-28 malformed tool calls per run where Spark made 2-4.
+  for (const prompt of ["What year was the first iPhone released?", "When did eBay launch?", "Which macOS version added Stage Manager?", "How much did the first iPad cost?"]) {
+    assert.equal(chooseModel(prompt), "spark", prompt);
+    assert.equal(researchQuestion(prompt), true, prompt);
+  }
+  for (const prompt of ["What does restockReport return?", "Where is isEnabled set?", "How does onClick get its handler?"]) {
+    assert.equal(chooseModel(prompt), "lfm3", prompt);
+  }
+});

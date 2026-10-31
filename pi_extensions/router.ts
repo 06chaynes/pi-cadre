@@ -17,7 +17,9 @@ const LOCAL_REFERENCE = new RegExp(
     `\\b[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
     "`[^`]+`",
     "\\b[a-z0-9]+_[a-z0-9_]+\\b",
-    "\\b[a-z]+[A-Z]\\w*\\b",
+    // camelCase: two or more lowercase letters, then a capital and a lowercase letter, so identifiers (restockReport,
+    // isEnabled) count and product names (iPhone, eBay, macOS) do not.
+    "\\b[a-z]{2,}[A-Z][a-z]\\w*\\b",
     "\\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\\b",
   ].join("|"),
 );
