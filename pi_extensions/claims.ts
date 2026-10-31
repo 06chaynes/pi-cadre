@@ -45,6 +45,9 @@ const MIN_NEAR_WORDS = 3;
 const NEAR_CHARS = 300;
 const PASSAGE_CHARS = 300;
 const QUOTE_WORDS = 8;
+// A quoted phrase shorter than this is a label in the writer's own words, not a quotation (in the scored sessions both
+// unsupported quotes of three words or fewer were labels; every misquote had 13 words or more).
+const MIN_QUOTE_WORDS = 4;
 
 const bareUrl = (url: string) => url.replace(/[).,;:'"*`>\]|]+$/, "");
 const normUrl = (url: string) =>
@@ -87,7 +90,7 @@ export function claimsOf(text: string): Claim[] {
     const after = plain.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
     if (significant(n).length >= 3 || n.includes(".") || UNIT_SIGN.test(after)) add("number", n, m.index!);
   }
-  for (const m of prose.matchAll(QUOTE)) add("quote", m[1].trim(), m.index!);
+  for (const m of prose.matchAll(QUOTE)) if (m[1].trim().split(/\s+/).length >= MIN_QUOTE_WORDS) add("quote", m[1].trim(), m.index!);
   for (const m of prose.matchAll(URL)) add("url", bareUrl(m[0]), m.index!);
   return out;
 }

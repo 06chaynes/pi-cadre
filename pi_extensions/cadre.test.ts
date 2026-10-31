@@ -789,6 +789,25 @@ test("a URL cited only from a failed call gets one corrective step at the end of
   assert.equal(ok?.continue, undefined, "a URL that also loaded is fine");
 });
 
+test("a number the answer reports from a failed call (an HTTP status) is supported by that failure", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "What are the latest research results in the field of ML?";
+  const url = "https://towardsdatascience.com/agent-study/";
+  const { session } = realSession([
+    { role: "user", content: prompt },
+    toolCall("f1", "fetch_content", { url }),
+    { ...toolResult("f1", "fetch_content", "Error: HTTP 403 Forbidden"), isError: true },
+    toolCall("f2", "fetch_content", { url: "https://arxiv.org/abs/2610.37398" }),
+    toolResult("f2", "fetch_content", "SIGMA: density estimation with principled uncertainty quantification."),
+    answer("SIGMA proposes density estimation with uncertainty quantification. The agent study could not be read (the site returned HTTP 403)."),
+  ]);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+  const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  assert.equal(result?.continue, undefined, result?.entries?.[0]?.content);
+});
+
 test("a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();

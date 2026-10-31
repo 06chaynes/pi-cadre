@@ -711,7 +711,9 @@ export default async function (pi: ExtensionAPI) {
           text: (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m),
           guessed: guesses(argsOf.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
         }));
-      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...results];
+      // A failed call's error supports what the answer reports about the failure (an HTTP status, say).
+      const errors = branch.filter((m) => m.role === "toolResult" && m.isError).map(textOf);
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results];
       const evidence = results.map((r) => r.text);
       for (const [where, text] of produced) {
         for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence)) {

@@ -64,6 +64,12 @@ test("a quote is supported only when a source contains it", () => {
   assert.deepEqual(unsupportedClaims(answer, ["…begin: This is the first release of the Linux operating system, and…"]), []);
 });
 
+test("a quoted label of three words or fewer is not a quotation to check", () => {
+  // A short label in quotes ("wrong answers believed" for an article title) is the writer's wording, not a quotation.
+  assert.deepEqual(values('I could not retrieve the "wrong answers believed" agent study.'), []);
+  assert.deepEqual(values('The notes begin "Hello everybody out there using".'), ["quote:Hello everybody out there using"]);
+});
+
 test("a URL is supported only when a source contains it", () => {
   const answer = "Source: https://en.wikipedia.org/wiki/Tokyo";
   assert.equal(unsupportedClaims(answer, ["Source: Tokyo - Wikipedia (https://en.m.wikipedia.org/wiki/Tokyo)"]).length, 0);
