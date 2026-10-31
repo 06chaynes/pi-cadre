@@ -62,7 +62,10 @@ const normUrl = (url: string) =>
     .replace(/\/$/, "")
     .toLowerCase();
 const normNumber = (n: string) => n.replace(/[,\u2009\u202f ]/g, "");
-const normText = (s: string) => s.replace(/[“”"'’*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+// Line comment and quote markers at line starts (///, //, #, *, --, ;, >) are dropped, so a quoted doc comment or
+// quoted block that spans lines matches its source.
+const LINE_MARKER = /^[ \t]*(?:\/\/[\/!]?|#+|\*|--|;+|>+)[ \t]?/gm;
+const normText = (s: string) => s.replace(LINE_MARKER, "").replace(/[“”"'’*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 const blank = (text: string, pattern: RegExp) => text.replace(pattern, (m) => " ".repeat(m.length));
 const significant = (n: string) => n.replace(/\D/g, "").replace(/^0+/, "");
 

@@ -75,6 +75,14 @@ test("an answer that copies a source's run-together power (2136,279,841) reads i
   assert.deepEqual(values("It has 2136,279,841 parts."), ["number:2136279841"]);
 });
 
+test("a quote of a comment or quoted block that spans lines matches across the line markers", () => {
+  const answer = 'Its docstring says "Initialize TOTP setup for a user. Generates a new secret and QR code for authenticator app setup."';
+  for (const marker of ["///", "//", "#", " *", "--", ">"]) {
+    const source = `${marker} Initialize TOTP setup for a user.\n${marker} Generates a new secret and QR code for authenticator app setup.\npub fn init_totp_setup() {}`;
+    assert.deepEqual(unsupportedClaims(answer, [source]), [], marker);
+  }
+});
+
 test("a quoted label of three words or fewer is not a quotation to check", () => {
   // A short label in quotes ("wrong answers believed" for an article title) is the writer's wording, not a quotation.
   assert.deepEqual(values('I could not retrieve the "wrong answers believed" agent study.'), []);
