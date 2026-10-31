@@ -732,7 +732,18 @@ export default async function (pi: ExtensionAPI) {
             return [page, ...linked];
           }),
         );
-      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, fetched.join("\n")];
+      // Read results carry no line numbers; numbered from the read's offset, they support a line number the answer cites
+      // ("its doc comment sits at ~1422") where that line is about the same thing, and not a wrong one.
+      const numbered = branch
+        .filter((m) => m.role === "toolResult" && !m.isError && m.toolName === "read")
+        .map((m) => {
+          const offset = Number(JSON.parse(argsOf.get(m.toolCallId) ?? "{}").offset) || 1;
+          return textOf(m)
+            .split("\n")
+            .map((line: string, i: number) => `${offset + i}: ${line}`)
+            .join("\n");
+        });
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, ...numbered, fetched.join("\n")];
       const evidence = results.map((r) => r.text);
       for (const [where, text] of produced) {
         for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence)) {

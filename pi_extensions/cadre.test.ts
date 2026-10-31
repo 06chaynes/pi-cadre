@@ -833,6 +833,27 @@ test("a URL is supported by a successful fetch of it, or by a relative link on a
   assert.match(flagged.entries[0].content, /largestknownprimes\.com\/largest-prime-2018 \(in "[^"]*"\) appears in no source/);
 });
 
+test("a line number is supported by the numbered lines of a read, and a wrong one is not", async () => {
+  // Read results carry no line numbers, so "its doc comment sits just above at ~1422" was flagged though it was right.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "In this repository, which function applies an identity provider's group-to-role mappings? Give the name and its file.";
+  const lines = ["}", "", "/// Applies an identity provider's group-to-role mappings to a user.", "/// Shared by the login callback and the re-sync.", "pub async fn apply_role_mappings() {}"];
+  const run = async (claim: string) => {
+    const { session } = realSession([
+      { role: "user", content: prompt },
+      toolCall("r1", "read", { path: "mandible/src/routes/auth_oidc.rs", offset: 1420, limit: 5 }),
+      toolResult("r1", "read", lines.join("\n")),
+      answer(`apply_role_mappings in mandible/src/routes/auth_oidc.rs; its doc comment about group-to-role mappings sits at ~${claim}.`),
+    ]);
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  };
+  assert.equal((await run("1422"))?.continue, undefined);
+  assert.match((await run("1488")).entries[0].content, /1488 \(in "/);
+});
+
 test("a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
