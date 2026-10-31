@@ -730,8 +730,10 @@ export default async function (pi: ExtensionAPI) {
     symbols = descry ? await descrySymbols(descry.server, event.prompt, SYMBOLS_MAX_CHARS) : "";
     if (thinkingMode === "auto") {
       const reasoning = REASONING_PROMPT.test(event.prompt);
-      // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts.
-      pi.setThinkingLevel(OPTS.has("think") ? (reasoning ? "high" : "low") : reasoning ? "medium" : "off");
+      // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts; think-off, think-low and
+      // think-high force one level for every prompt, for comparing levels on the same tasks.
+      const forced = (["off", "low", "high"] as const).find((level) => OPTS.has(`think-${level}`));
+      pi.setThinkingLevel(forced ?? (OPTS.has("think") ? (reasoning ? "high" : "low") : reasoning ? "medium" : "off"));
     }
     return undefined;
   });

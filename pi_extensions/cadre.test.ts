@@ -656,6 +656,25 @@ test("with think, auto thinking defaults to low and uses high for reasoning prom
   }
 });
 
+test("with think-off, think-low or think-high, every prompt gets that level, reasoning prompts included", async () => {
+  const saved = process.env.CADRE_OPTS;
+  try {
+    for (const level of ["off", "low", "high"]) {
+      process.env.CADRE_OPTS = `think-${level}`;
+      serveProps({});
+      const { pi, calls } = fakePi();
+      await extension(pi as any);
+      for (const prompt of ["Find the root cause and fix it", "Research twelve facts"]) {
+        await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+      }
+      assert.deepEqual(calls.thinking, [level, level], level);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.CADRE_OPTS;
+    else process.env.CADRE_OPTS = saved;
+  }
+});
+
 test("an oversized search result keeps every hit, a cut read says how to see more, and huge text is cut before counting", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const served = globalThis.fetch;
