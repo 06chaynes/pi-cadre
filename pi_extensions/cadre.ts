@@ -585,13 +585,13 @@ export default async function (pi: ExtensionAPI) {
         kept += tokens;
         continue;
       }
+      // Line matching keeps the answer more often than the hit-aware shortener at this budget (146 vs 133 of 255 answer-
+      // bearing results in the scored sessions), so clearing uses it for every kind of result.
       const query = `${withoutGuesses(callArgs.get(message.toolCallId) ?? "", knownFor(message.toolCallId))} ${lastPrompt}`;
-      // A list of hits keeps every hit (see shortenHits); other text keeps its opening and its matching lines.
-      const hits = shortenHits(text, query, CLEAR_KEEP_CHARS);
-      const what = hits ? "Every hit's title and URL and the passages that best match its call and the request are" : "Its opening and the lines matching its call and the request are";
       const extract =
-        `[${name} result, ${size} characters, cleared from context ${reason}. ${what} kept below; run ${name} again for the rest.]\n` +
-        (hits ?? shortenText(text, query, CLEAR_KEEP_CHARS));
+        `[${name} result, ${size} characters, cleared from context ${reason}. ` +
+        `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
+        shortenText(text, query, CLEAR_KEEP_CHARS);
       const content = extractChars + extract.length <= EXTRACT_BUDGET_CHARS ? extract : bare;
       extractChars += content === extract ? extract.length : 0;
       edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content } });
