@@ -496,6 +496,39 @@ test("a cleared result keeps the lines that match its tool call and the request"
   assert.ok(seen[2].length <= 1200, `${seen[2].length} characters`);
 });
 
+test("a cleared search result keeps every hit's source instead of the hits that match a number the model guessed", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  // The real failure: the query carried the model's guess "1978"; clearing kept three date-bug hits that match it and
+  // dropped the Wikipedia hit with the right year, so the answer was written from the guess.
+  const prompt = "Research each of these and write research.md:\n7. The height of Mount Everest.\n8. The year the first iPhone was released.";
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+  const hit = (snippet: string, title: string, url: string) => `${snippet}\nSource: ${title} (${url})`;
+  const page = [
+    "**Provider:** searxng",
+    hit("Everybody knows that iPhones did not exist back then, but the April 1 1978 date is used for all AS IS iPhones, which I believe was originally meant to be April 1 1976. This date is significant for Apple.", "iPhone purchase date is 1 april 1978 - Apple Support Community", "https://discussions.apple.com/thread/254477145"),
+    hit("Producers sign in to have access to: Commercial and Personal Auto Insurance Rating, underwriting guidelines, forms, training.", "Producer Log In | First Chicago Insurance", "https://www.firstchicagoinsurance.com/Producers/Login"),
+    hit("Development of the iPhone began in 2005 and continued in secrecy until its public unveiling at Macworld 2007. The device broke with prevailing mobile phone designs.", "iPhone (1st generation) - Wikipedia", "https://en.wikipedia.org/wiki/IPhone_(1st_generation)"),
+    hit("Contact Us Address First Chicago Insurance Company 6640 S Cicero Ave Bedford Park, IL 60638", "Contact Us - First Chicago Insurance", "https://www.firstchicagoinsurance.com/Home/Contact"),
+    hit("What the 1978 date means: the 1978 date is a generic placeholder used for Apple iPhone devices sold without a standard one-year warranty.", "My iphone showing that it has been purchased in 1978", "https://www.reddit.com/r/iPhone13/comments/1ooy9bu/"),
+    hit("The 1978 purchase date on an Apple iPhone appears on AS IS units; Apple support explains the 1978 date is a placeholder.", "Why does my iPhone say 1978 - Apple", "https://example.org/iphone-1978"),
+  ].join("\n\n") + "\n\n" + "Unrelated trailing text about insurance forms. ".repeat(20);
+  const { session } = realSession([
+    { role: "user", content: prompt },
+    toolCall("c1", "web_search", { queries: ["first iPhone release year 1978 Apple"] }),
+    toolResult("c1", "web_search", page),
+    answer("Done."),
+  ]);
+  const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
+  // Every source stays visible (the Wikipedia hit was dropped entirely before), so the model can fetch the one it
+  // needs. Keeping the answering sentence inside a snippet needs relevance beyond word matching ("unveiling at Macworld
+  // 2007" shares one word with the question); that is a separate step.
+  for (const url of ["discussions.apple.com", "en.wikipedia.org/wiki/IPhone_(1st_generation)", "reddit.com/r/iPhone13", "example.org/iphone-1978"]) assert.ok(seen[2].includes(url), url);
+  assert.match(seen[2], /iPhone \(1st generation\) - Wikipedia/);
+  assert.ok(seen[2].length <= 1300, `${seen[2].length} characters`);
+});
+
 test("once kept extracts pass their budget, the oldest cleared results shrink to a one-line note", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();

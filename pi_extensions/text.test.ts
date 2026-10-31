@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { bm25, keywords } from "./text.ts";
+import { bm25, keywords, withoutGuesses } from "./text.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -23,4 +23,11 @@ test("bm25 ranks the passage that answers above one that only shares a common wo
   assert.ok(answer.score > general.score);
   assert.equal(answer.matched, 6);
   assert.deepEqual(index.queryTerms("Prime numbers and primes"), ["prime", "number"]);
+});
+
+test("withoutGuesses drops numbers the known text does not contain, ignoring digit grouping", () => {
+  const known = "Research: 8. The year the first iPhone was released. The prime has 41,024,320 digits.";
+  assert.equal(withoutGuesses("first iPhone release year 1978 Apple", known), "first iPhone release year Apple");
+  assert.equal(withoutGuesses('{"queries":["prime 41024320 digits found 2018"]}', known), '{"queries":["prime 41024320 digits found"]}');
+  assert.equal(withoutGuesses("item 8 of the list", known), "item 8 of the list", "single digits stay: too common to be a guess");
 });

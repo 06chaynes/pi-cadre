@@ -130,13 +130,14 @@ const SEARCH_PASSAGE_CHARS = 500;
  * fewer than two hits (shortenText handles it).
  */
 export function shortenHits(text: string, query: string, maxChars: number): string | undefined {
-  const hits: { header: string; body: string }[] = [];
+  const hits: { first: string; sources: string; header: string; body: string }[] = [];
   const preamble: string[] = [];
   for (const block of text.split(/\n\s*\n/)) {
     if (URL_IN_TEXT.test(block)) {
       const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
-      const heading = [...new Set([lines[0], ...lines.filter((line) => URL_IN_TEXT.test(line))])];
-      hits.push({ header: heading.map((line) => line.slice(0, TITLE_CHARS + 100)).join("\n"), body: block });
+      const sources = lines.filter((line) => URL_IN_TEXT.test(line)).map((line) => line.slice(0, TITLE_CHARS + 100));
+      const first = URL_IN_TEXT.test(lines[0]) ? "" : lines[0].slice(0, TITLE_CHARS + 100);
+      hits.push({ first, sources: sources.join("\n"), header: [first, sources.join("\n")].filter(Boolean).join("\n"), body: block });
     } else if (hits.length) {
       hits[hits.length - 1].body += "\n\n" + block;
     } else {
@@ -147,6 +148,16 @@ export function shortenHits(text: string, query: string, maxChars: number): stri
   const note = `[Result shortened from ${text.length.toLocaleString("en-US")} characters: every hit's title and URL, then the passages that best match the request. Fetch a URL for its full text.]`;
   const lead = preamble.join("\n").split("\n")[0]?.slice(0, TITLE_CHARS) ?? "";
   let room = maxChars - note.length - lead.length - 1 - hits.reduce((sum, h) => sum + h.header.length + 2, 0);
+  if (room < 0) {
+    // The headings alone do not fit: each hit gets an equal share, its source lines whole and the rest for the start
+    // of its first line, so every hit stays visible instead of the last ones being cut off.
+    const share = Math.floor((maxChars - note.length - lead.length - 1) / hits.length) - 2;
+    for (const h of hits) {
+      const first = h.first.slice(0, Math.max(0, share - h.sources.length - 1));
+      h.header = [first, h.sources.slice(0, share)].filter(Boolean).join("\n");
+    }
+    room = maxChars - note.length - lead.length - 1 - hits.reduce((sum, h) => sum + h.header.length + 2, 0);
+  }
   const all = hits.flatMap((h, hit) => passages({ source: "", text: h.body }, SEARCH_PASSAGE_CHARS).map((p) => ({ hit, text: p.text })));
   const scores = all.length ? bm25(all.map((p) => p.text)).score(query) : [];
   const order = all.map((_, i) => i).filter((i) => scores[i].matched > 0).sort((a, b) => scores[b].score - scores[a].score);

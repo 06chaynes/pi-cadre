@@ -124,6 +124,18 @@ test("hits whose URL comes last (pi-web-access's format) are recognized the same
   assert.match(short, /Hopfield and Hinton won the 2024 Nobel Prize in Physics\./);
 });
 
+test("when the hits' headings do not fit, each hit keeps an equal share with its source line whole, so no hit is cut off", () => {
+  // The real failure: a cleared result kept its first three hits and dropped the rest at the character limit.
+  const hit = (snippet: string, title: string, url: string) => `${snippet}\nSource: ${title} (${url})`;
+  const long = (topic: string) => `${topic} ${"and more words about it ".repeat(8)}`;
+  const urls = Array.from({ length: 8 }, (_, i) => `https://site${i}.example/page`);
+  const text = ["**Provider:** searxng", ...urls.map((url, i) => hit(long(`Snippet ${i}`), `Title ${i}`, url))].join("\n\n");
+  const short = shortenHits(text, "first iPhone release year", 1000);
+  assert.ok(short !== undefined && short.length <= 1000, `${short?.length} characters`);
+  for (const url of urls) assert.ok(short.includes(`(${url})`), url);
+  for (let i = 0; i < 8; i++) assert.ok(short.includes(`Snippet ${i}`), `snippet ${i} keeps its start`);
+});
+
 test("text that is not a list of search hits is left to shortenText", () => {
   assert.equal(shortenHits("x".repeat(10_000), "query", 3000), undefined);
 });

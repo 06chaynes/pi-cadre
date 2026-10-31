@@ -34,6 +34,7 @@ import { researchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
 import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
+import { withoutGuesses } from "./text.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
@@ -235,18 +236,26 @@ export default async function (pi: ExtensionAPI) {
   let pendingCalls = 1;
 
   /** Removes, from query-like arguments, numbers found in no user request or earlier tool result of the session. */
+  /**
+   * For each tool call in `messages`, by id, what the user said and tools returned before it: the numbers it may carry
+   * as known (see withoutGuesses). Later results do not count, so a guess cannot be confirmed by what its own search found.
+   */
+  const knownByCall = (messages: readonly any[]) => {
+    const at = new Map<string, number>();
+    let known = "";
+    for (const m of messages) {
+      if (m?.role === "user" || m?.role === "toolResult") known += "\n" + textOf(m);
+      else if (m?.role === "assistant") for (const b of m.content ?? []) if (b.type === "toolCall") at.set(b.id, known.length);
+    }
+    return (id: string) => known.slice(0, at.get(id) ?? known.length);
+  };
+  const branchMessages = (ctx: ExtensionContext) => ((ctx.sessionManager?.getBranch() ?? []) as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
+
   const neutralizeQueries = (input: Record<string, unknown>, ctx: ExtensionContext) => {
     const keys = ["query", "queries", "q", "search_query", "searchQuery"].filter((key) => key in input);
     if (!keys.length) return;
-    const known = (ctx.sessionManager.getBranch() as any[])
-      .flatMap((e) => (e.type === "message" && (e.message.role === "user" || e.message.role === "toolResult") ? [textOf(e.message)] : []))
-      .join(" ")
-      .replace(/,/g, "");
-    const clean = (query: string) =>
-      query
-        .replace(/\b\d[\d,.]*\d\b|\b\d{2,}\b/g, (n) => (known.includes(n.replace(/,/g, "")) ? n : ""))
-        .replace(/\s{2,}/g, " ")
-        .trim();
+    const known = knownByCall(branchMessages(ctx))("");
+    const clean = (query: string) => withoutGuesses(query, known).replace(/\s{2,}/g, " ").trim();
     for (const key of keys) {
       const value = input[key];
       if (typeof value === "string") input[key] = clean(value);
@@ -393,8 +402,10 @@ export default async function (pi: ExtensionAPI) {
     let content = note === undefined ? event.content : [...event.content, { type: "text" as const, text: note }];
     const text = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
     const budget = Math.min(RESULT_MAX_TOKENS, Math.floor(resultRoom() / pendingCalls));
-    // Shortening ranks against the call (its query, path, or command) as well as the request.
-    const query = `${JSON.stringify(event.input ?? {})} ${lastPrompt}`;
+    // Shortening ranks against the call (its query, path, or command) as well as the request, without numbers the model
+    // supplied itself: a guess must not decide which parts of the result stay.
+    const known = knownByCall(branchMessages(ctx))(event.toolCallId);
+    const query = `${withoutGuesses(JSON.stringify(event.input ?? {}), known)} ${lastPrompt}`;
     const shorten = (chars: number) => shortenHits(text, query, chars) ?? shortenText(text, query, chars, MORE[event.toolName] ?? MORE_DEFAULT);
     let short = text;
     let tokens = text.length > budget * MAX_CHARS_PER_TOKEN ? Infinity : await resultTokens(text);
@@ -547,6 +558,7 @@ export default async function (pi: ExtensionAPI) {
         for (const block of message.content ?? []) if (block.type === "toolCall") callArgs.set(block.id, JSON.stringify(block.arguments ?? {}));
       }
     }
+    const knownFor = knownByCall(entries.flatMap((projected) => projected.messages as any[]));
     const edits = [];
     let kept = 0;
     let extractChars = 0;
@@ -573,10 +585,13 @@ export default async function (pi: ExtensionAPI) {
         kept += tokens;
         continue;
       }
+      const query = `${withoutGuesses(callArgs.get(message.toolCallId) ?? "", knownFor(message.toolCallId))} ${lastPrompt}`;
+      // A list of hits keeps every hit (see shortenHits); other text keeps its opening and its matching lines.
+      const hits = shortenHits(text, query, CLEAR_KEEP_CHARS);
+      const what = hits ? "Every hit's title and URL and the passages that best match its call and the request are" : "Its opening and the lines matching its call and the request are";
       const extract =
-        `[${name} result, ${size} characters, cleared from context ${reason}. ` +
-        `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
-        shortenText(text, `${callArgs.get(message.toolCallId) ?? ""} ${lastPrompt}`, CLEAR_KEEP_CHARS);
+        `[${name} result, ${size} characters, cleared from context ${reason}. ${what} kept below; run ${name} again for the rest.]\n` +
+        (hits ?? shortenText(text, query, CLEAR_KEEP_CHARS));
       const content = extractChars + extract.length <= EXTRACT_BUDGET_CHARS ? extract : bare;
       extractChars += content === extract ? extract.length : 0;
       edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content } });
@@ -785,7 +800,9 @@ export default async function (pi: ExtensionAPI) {
     const stored = cleared.map(({ source, text }) => ({ source, text }));
     const task = textOf([...branch].reverse().find((m: any) => m.role === "user") ?? {});
     const step = [...messages].reverse().find((m: any) => m.role === "assistant");
-    const stepText = step ? `${textOf(step)} ${(step.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => JSON.stringify(b.arguments)).join(" ")}` : "";
+    const knownFor = knownByCall(branch);
+    const stepCalls = (step?.content ?? []).filter((b: any) => b.type === "toolCall");
+    const stepText = step ? `${textOf(step)} ${stepCalls.map((b: any) => withoutGuesses(JSON.stringify(b.arguments), knownFor(b.id))).join(" ")}` : "";
     const found = recall(stored, taskQueries(task, stepText), RECALL_MAX_CHARS);
     if (!found.length) return undefined;
     const byCall = new Map<string, string[]>();

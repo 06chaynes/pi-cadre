@@ -68,3 +68,16 @@ export function bm25(docs: readonly string[]) {
   };
   return { score, queryTerms };
 }
+
+// Numbers of two or more digits (with grouping or decimals): values an answer or a query may carry.
+const NUMBER = /(\s?)(\b\d[\d,.]*\d\b|\b\d{2,}\b)/g;
+
+/**
+ * `text` without the numbers that `known` (what the user said and tools returned before it was written) does not
+ * contain: values the model supplied itself. Used so a search, and the ranking of what results keep, follow what is
+ * known rather than the model's guess. Digit grouping is ignored when comparing.
+ */
+export function withoutGuesses(text: string, known: string): string {
+  const flat = known.replace(/,/g, "");
+  return text.replace(NUMBER, (match, _space, n: string) => (flat.includes(n.replace(/,/g, "")) ? match : ""));
+}
