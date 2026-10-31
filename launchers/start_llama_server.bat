@@ -9,7 +9,7 @@ if exist "%PROJECT_DIR%\cadre_config.env" (
 :args
 if "%~1"=="" goto run
 if /i "%~1"=="-m" (set "MODEL=%~2") else if /i "%~1"=="-c" (set "CTX_SIZE=%~2") else if /i "%~1"=="-np" (set "PARALLEL_SLOTS=%~2") else if /i "%~1"=="-p" (set "PORT=%~2") else if /i "%~1"=="-ngl" (set "N_GPU_LAYERS=%~2") else (
-    echo Usage: %~nx0 [-m dual^|spark^|lfm3^|HF_ID^|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS]
+    echo Usage: %~nx0 [-m dual^|spark^|lfm3^|reranker^|HF_ID^|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS]
     exit /b 1
 )
 shift
@@ -31,6 +31,13 @@ if /i "%MODEL%"=="dual" (
 
 set "DEFAULTS=8080 32768 8"
 set "ID=%MODEL%"
+set "MODE_ARGS="
+if /i "%MODEL%"=="reranker" (
+    set "DEFAULTS=8082 8192 1"
+    set "ID=ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+    if defined RERANKER_MODEL set "ID=%RERANKER_MODEL%"
+    set "MODE_ARGS=--embedding --pooling rank --reranking -ub 8192 -b 8192"
+)
 if /i "%MODEL%"=="lfm3" (
     set "DEFAULTS=8081 65536 4"
     set "ID=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M"
@@ -51,4 +58,4 @@ for /f "tokens=1-3" %%a in ("%DEFAULTS%") do (
 if not defined HOST set HOST=127.0.0.1
 if not defined N_GPU_LAYERS set N_GPU_LAYERS=99
 
-llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja
+llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja %MODE_ARGS%

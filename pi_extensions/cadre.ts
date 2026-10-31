@@ -433,7 +433,6 @@ export default async function (pi: ExtensionAPI) {
 
   // EXPERIMENT ONLY (removed before release): CADRE_OPTS turns on options still being compared.
   //   descry    with descry installed, the system message lists its symbols for the request (see descry.ts)
-  //   rerank    a cleared result keeps the passages a reranker scores highest for the request item (see rerank.ts)
   const OPTS = new Set((process.env.CADRE_OPTS ?? "").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
@@ -583,22 +582,17 @@ export default async function (pi: ExtensionAPI) {
         continue;
       }
       const call = withoutGuesses(callArgs.get(message.toolCallId) ?? "", knownFor(message.toolCallId));
-      // With the reranker, the passages that best answer the request item this call serves stay (see rerank.ts);
-      // without it, line matching, which keeps the answer more often than the hit-aware shortener at this budget.
-      let extract: string | undefined;
-      if (OPTS.has("rerank")) {
-        const pieces = passages({ source: "", text }, RERANK_PASSAGE_CHARS).map((p) => p.text);
-        const scores = await rerankScores(`http://${HOST}:${RERANKER.port}`, itemFor(call, lastPrompt), pieces);
-        if (scores)
-          extract =
-            `[${name} result, ${size} characters, cleared from context ${reason}. ` +
-            `The passages that best answer the request are kept below; run ${name} again for the rest.]\n` +
-            keepBest(pieces, scores, CLEAR_KEEP_CHARS).join("\n");
-      }
-      extract ??=
-        `[${name} result, ${size} characters, cleared from context ${reason}. ` +
-        `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
-        shortenText(text, `${call} ${lastPrompt}`, CLEAR_KEEP_CHARS);
+      // With a reranker running, the passages that best answer the request item this call serves stay (see
+      // rerank.ts); without one, line matching, which keeps the answer more often than the hit-aware shortener here.
+      const pieces = passages({ source: "", text }, RERANK_PASSAGE_CHARS).map((p) => p.text);
+      const scores = await rerankScores(`http://${HOST}:${RERANKER.port}`, itemFor(call, lastPrompt), pieces);
+      const extract = scores
+        ? `[${name} result, ${size} characters, cleared from context ${reason}. ` +
+          `The passages that best answer the request are kept below; run ${name} again for the rest.]\n` +
+          keepBest(pieces, scores, CLEAR_KEEP_CHARS).join("\n")
+        : `[${name} result, ${size} characters, cleared from context ${reason}. ` +
+          `Its opening and the lines matching its call and the request are kept below; run ${name} again for the rest.]\n` +
+          shortenText(text, `${call} ${lastPrompt}`, CLEAR_KEEP_CHARS);
       const content = extractChars + extract.length <= EXTRACT_BUDGET_CHARS ? extract : bare;
       extractChars += content === extract ? extract.length : 0;
       edits.unshift({ type: "context_edit" as const, targetId: id, replacement: { content } });

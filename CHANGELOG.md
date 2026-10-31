@@ -31,6 +31,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   broken file in the same tool result.
 - Path-guard blocks say the way forward and list matching project files.
 - Web results from any tool are shortened by their hits (each hit's title and URL, best passages first).
+- Optional reranker (`MODEL=reranker`, Qwen3-Reranker-0.6B on port 8082): while it runs, a cleared result keeps the
+  passages it scores highest for the request item the call served. The answer stayed in 238 of 254 answer-bearing
+  results at the clearing budget, against 153 with line matching; in replays of the iPhone write step the wrong year
+  fell from 8 to 3 of 10 (thinking off) and 5 to 2 (low); live research scores were level (40 and 41 of 42). Without it, line
+  matching is used.
 - `launchers/searxng.sh` / `.bat`: set up, check and tear down a local SearXNG for web search without an API key.
 
 ### Changed

@@ -9,7 +9,7 @@ if [ -f "$PROJECT_DIR/cadre_config.env" ]; then
 fi
 
 usage() {
-    echo "Usage: $0 [-m dual|spark|lfm3|HF_ID|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS] [-- llama-server args]"
+    echo "Usage: $0 [-m dual|spark|lfm3|reranker|HF_ID|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS] [-- llama-server args]"
 }
 
 EXTRA_ARGS=()
@@ -41,6 +41,10 @@ case ${MODEL:-dual} in
         ;;
     spark) ID=${SPARK_MODEL:-XHToken/Spark-X2.6-4B-GGUF:Q4_K_M}; DEFAULTS=(8080 131072 4) ;;
     lfm3) ID=${LFM3_MODEL:-LiquidAI/LFM3-1.7B-GGUF:Q4_K_M}; DEFAULTS=(8081 65536 4) ;;
+    reranker)
+        ID=${RERANKER_MODEL:-ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF}; DEFAULTS=(8082 8192 1)
+        EXTRA_ARGS=(--embedding --pooling rank --reranking -ub 8192 -b 8192 "${EXTRA_ARGS[@]}")
+        ;;
     *) ID=$MODEL; DEFAULTS=(8080 32768 8) ;;
 esac
 case $ID in

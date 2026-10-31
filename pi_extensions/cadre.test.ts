@@ -524,9 +524,8 @@ test("a number the model guessed in its query does not change what a cleared sea
   assert.ok(guessed.length <= 1300, `${guessed.length} characters`);
 });
 
-test("with rerank, a cleared result keeps the passages the reranker scores highest for the request item, and falls back to line matching without it", async () => {
-  const saved = { opts: process.env.CADRE_OPTS, fetch: globalThis.fetch };
-  process.env.CADRE_OPTS = "rerank";
+test("with a reranker running, a cleared result keeps the passages it scores highest for the request item; without one, line matching", async () => {
+  const saved = globalThis.fetch;
   try {
     serveProps({ 8080: 32768, 8081: 16384 });
     const { pi, calls } = fakePi();
@@ -564,9 +563,7 @@ test("with rerank, a cleared result keeps the passages the reranker scores highe
     }) as typeof fetch;
     assert.match(await run(), /Its opening and the lines matching its call and the request are kept below/, "line matching without the reranker");
   } finally {
-    globalThis.fetch = saved.fetch;
-    if (saved.opts === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved.opts;
+    globalThis.fetch = saved;
   }
 });
 

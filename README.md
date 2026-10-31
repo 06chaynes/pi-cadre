@@ -68,6 +68,7 @@ Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 | `dual` | Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (4 slots x 16k) | `cadre`, routed per prompt |
 | `spark` | Spark on 8080 | Spark |
 | `lfm3` | LFM3 on 8081 | LFM3 |
+| `reranker` | Qwen3-Reranker-0.6B on 8082 (optional, run beside the others) | not a chat model |
 | HF repo ID or `.gguf` path | that model on `PORT` (default 8080) | Spark entry on 8080 |
 
 Command-line flags override the config; run `start_llama_server.sh --help` to list them. By default `spark` and `lfm3` download the Q4_K_M quants from Hugging Face. To use local files or other quants, set `SPARK_MODEL` and `LFM3_MODEL` to a `.gguf` path or Hugging Face ID.
@@ -106,7 +107,10 @@ code, so none of this depends on the model remembering to do it:
 - **Old results leave; useful passages come back.** During a task, results the model has already read are replaced
   by a short extract once they pass a budget. Passages of cleared web results that match the task are restored inside
   the result they came from (one query per listed item, ranked with BM25). The full text of shortened web results is
-  kept in `~/.local/state/pi-cadre/results/` for a week so these passages can come from the cut part too.
+  kept in `~/.local/state/pi-cadre/results/` for a week so these passages can come from the cut part too. With the
+  optional reranker running (`start_llama_server.sh -m reranker`), a cleared result keeps the passages it scores
+  highest for the request item the call served; across 254 results that held an answer, the answer stayed in 238 this
+  way and in 153 with line matching. Without it, line matching is used.
 - **Searches carry what is known, not guesses.** A number in a search query that neither your request nor an earlier
   result contains is removed before the search runs, and such numbers never decide which parts of a result are kept.
   With a guessed year in the query, a search for the first iPhone's release year returned pages about a date bug and
