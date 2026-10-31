@@ -121,14 +121,17 @@ test("does not prompt when a llama-cpp model is selected, or without a UI", asyn
   assert.deepEqual([selected.asked, headless.asked, calls.models], [[], [], []]);
 });
 
-test("auto thinking turns on for review and diagnosis prompts only", async () => {
+test("auto thinking is low for every prompt, and /cadre-thinking picks another level", async () => {
   serveProps({});
   const { pi, calls } = fakePi();
   await extension(pi as any);
-  for (const prompt of ["Review store.py for edge cases", "Diagnose the root cause", "Add a restock_report method"]) {
+  for (const prompt of ["Review store.py for edge cases", "Diagnose the root cause", "Add a restock_report method", "Research twelve facts"]) {
     await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
   }
-  assert.deepEqual(calls.thinking, ["medium", "medium", "off"]);
+  assert.deepEqual(calls.thinking, ["low", "low", "low", "low"]);
+  await calls.commands["cadre-thinking"].handler("high", uiContext(true).ctx);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Research twelve facts" }, uiContext(true).ctx);
+  assert.deepEqual(calls.thinking, ["low", "low", "low", "low", "high"], "the chosen level is set once; auto no longer overrides it");
 });
 
 test("the tool_call hook blocks until /cadre-guard off", async () => {
@@ -286,7 +289,7 @@ test("the digest carries an earlier compaction summary forward", async () => {
       { role: "assistant", content: [{ type: "text", text: "Linus Torvalds." }] },
       { role: "user", content: "How long can a sperm whale dive?" },
     );
-    const result = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 25_000 } }, digestContext(entries));
+    const result = await calls.handlers["session_before_compact"]({ reason: "overflow", preparation: { tokensBefore: 25_000 } }, digestContext(entries));
     assert.match(result.compaction.summary, /Answer: 2024\./);
     assert.match(result.compaction.summary, /^2\. User asked: Who wrote Linux\?\n   Answer: Linus Torvalds\.$/m);
     assert.equal(result.compaction.summary.match(/Earlier in this session|follow unchanged/g)?.length, 2);
@@ -302,7 +305,7 @@ test("the digest leaves compaction to Pi when only a summary precedes the curren
       { role: "assistant", content: [{ type: "toolCall", name: "web_search", arguments: { query: "linux 0.01" } }] },
       { role: "toolResult", toolName: "web_search", content: [{ type: "text", text: "r".repeat(40_000) }] },
     );
-    const event = { reason: "threshold", preparation: { tokensBefore: 27_000 } };
+    const event = { reason: "overflow", preparation: { tokensBefore: 27_000 } };
     assert.equal(await calls.handlers["session_before_compact"](event, digestContext(entries)), undefined);
   });
 });
@@ -315,7 +318,7 @@ test("the digest stays within its size limit over a long session, newest answers
       messages.push({ role: "assistant", content: [{ type: "text", text: `Answer ${i}: ` + "a".repeat(1400) }] });
     }
     messages.push({ role: "user", content: "Question 31?" });
-    const result = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 25_000 } }, digestContext(afterCompaction(...messages)));
+    const result = await calls.handlers["session_before_compact"]({ reason: "overflow", preparation: { tokensBefore: 25_000 } }, digestContext(afterCompaction(...messages)));
     const summary: string = result.compaction.summary;
     assert.ok(summary.length <= 8000, `${summary.length} characters`);
     assert.match(summary, /^31\. User asked: Question 30\?\n   Answer: Answer 30: a{1400}$/m);
@@ -332,7 +335,7 @@ test("the digest keeps a model-written summary and numbers only questions", asyn
         (message, i) => ({ sourceEntry: { type: "message", id: `m${i}`, message }, messages: [message] }),
       ),
     ];
-    const result = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 25_000 } }, digestContext(entries));
+    const result = await calls.handlers["session_before_compact"]({ reason: "overflow", preparation: { tokensBefore: 25_000 } }, digestContext(entries));
     assert.match(result.compaction.summary, /## Goal\n- Find the largest prime\.\n1\. User asked: Who wrote Linux\?\n   Answer: Linus Torvalds\./);
   });
 });
@@ -684,42 +687,6 @@ test("reasoning from earlier steps leaves the request; the latest step keeps its
   assert.match(JSON.stringify(session.buildSessionContext().messages), /STEP-ONE reasoning/, "the session itself is unchanged");
 });
 
-test("with think, auto thinking defaults to low and uses high for reasoning prompts", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "think";
-  try {
-    serveProps({});
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    for (const prompt of ["Review store.py for edge cases", "Add a restock_report method", "Research twelve facts"]) {
-      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
-    }
-    assert.deepEqual(calls.thinking, ["high", "low", "low"]);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
-});
-
-test("with think-off, think-low or think-high, every prompt gets that level, reasoning prompts included", async () => {
-  const saved = process.env.CADRE_OPTS;
-  try {
-    for (const level of ["off", "low", "high"]) {
-      process.env.CADRE_OPTS = `think-${level}`;
-      serveProps({});
-      const { pi, calls } = fakePi();
-      await extension(pi as any);
-      for (const prompt of ["Find the root cause and fix it", "Research twelve facts"]) {
-        await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
-      }
-      assert.deepEqual(calls.thinking, [level, level], level);
-    }
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
-});
-
 test("an oversized search result keeps every hit, a cut read says how to see more, and huge text is cut before counting", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const served = globalThis.fetch;
@@ -785,7 +752,7 @@ test("the digest condenses earlier steps of the current request without a model,
     }
     const { session, ids } = realSession(messages);
     const ctx = { ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session };
-    const result = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 23_000 } }, ctx);
+    const result = await calls.handlers["session_before_compact"]({ reason: "overflow", preparation: { tokensBefore: 23_000 } }, ctx);
     const { summary, firstKeptEntryId } = result.compaction;
     assert.equal(firstKeptEntryId, ids[7], "the last three steps are kept in full");
     assert.ok(summary.includes(prompt), "the request is kept verbatim");
@@ -808,7 +775,7 @@ test("a second digest in the same request carries the condensed steps forward an
     const { session } = realSession([{ role: "user", content: prompt }, ...[0, 1, 2, 3, 4, 5].flatMap(step)]);
     const ctx = { ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session };
     const compact = async () => {
-      const { compaction } = await calls.handlers["session_before_compact"]({ reason: "threshold", preparation: { tokensBefore: 23_000 } }, ctx);
+      const { compaction } = await calls.handlers["session_before_compact"]({ reason: "overflow", preparation: { tokensBefore: 23_000 } }, ctx);
       session.appendCompaction(compaction.summary, compaction.firstKeptEntryId, 23_000);
       return compaction.summary as string;
     };

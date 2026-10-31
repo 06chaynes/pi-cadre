@@ -129,7 +129,6 @@ const START_TIMEOUT_MS = 30 * 60 * 1000;
 
 const THINKING_MODES = ["auto", "off", "minimal", "low", "medium", "high"] as const;
 type ThinkingMode = (typeof THINKING_MODES)[number];
-const REASONING_PROMPT = /plan|architect|diagnose|root cause|debug|investigate|review/i;
 
 const CODING_RULES = [
   "",
@@ -359,9 +358,10 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    // EXPERIMENT: "neutral" removes numbers a search query adds that no request or earlier result contains (the model's
-    // own beliefs). With "1978" in an iPhone query, SearXNG returned pages about a 1978 date bug instead of 2007.
-    if (OPTS.has("neutral") && !LOCAL_TOOLS.has(event.toolName)) neutralizeQueries(event.input as Record<string, unknown>, ctx);
+    // A search query loses numbers that no request or earlier result contains (the model's guesses): with "1978" in an
+    // iPhone query, SearXNG returned pages about a 1978 date bug, and the answer was wrong in 8 of 10 replays, 0 of 10
+    // without the guess.
+    if (!LOCAL_TOOLS.has(event.toolName)) neutralizeQueries(event.input as Record<string, unknown>, ctx);
     if (!guardOn) return undefined;
     const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());
     return reason === undefined ? undefined : { block: true, reason };
@@ -425,25 +425,16 @@ export default async function (pi: ExtensionAPI) {
     }
     if (short !== text) {
       content = [...content.filter((block) => block.type !== "text"), { type: "text" as const, text: short }];
-      if (OPTS.has("recall") && !LOCAL_TOOLS.has(event.toolName)) saveOriginal(resultsDir(), ctx.sessionManager.getSessionId(), event.toolCallId, text);
+      const sessionId = ctx.sessionManager?.getSessionId();
+      if (sessionId && !LOCAL_TOOLS.has(event.toolName)) saveOriginal(resultsDir(), sessionId, event.toolCallId, text);
     }
     return content === event.content ? undefined : { content };
   });
 
-  // EXPERIMENT ONLY (removed before release): CADRE_OPTS picks compaction options to compare.
-  //   cancel    cancel threshold compaction while the conversation fits Spark
-  //   clear     clear answered tool results from future context
-  //   digest    write the compaction summary without a model: earlier questions and answers, current turn kept
-  //   continue  if a run ends without an answer, continue it once
-  //   recall    passages of cleared web results that match the task come back with each request
-  //   think     auto thinking defaults to low (high for reasoning prompts) instead of off (medium)
-  //   neutral   numbers a search query adds that no request or earlier result contains are removed
-  //   map       the system message lists the project's files (see projectmap.ts)
+  // EXPERIMENT ONLY (removed before release): CADRE_OPTS turns on options still being compared.
   //   descry    with descry installed, the system message lists its symbols for the request (see descry.ts)
-  //   claims    the end-of-run source check also names numbers, quotes and URLs no source supports (see claims.ts)
   //   rerank    a cleared result keeps the passages a reranker scores highest for the request item (see rerank.ts)
-  //   research  a question about the world answered with no successful non-local tool result gets one step to look it up
-  const OPTS = new Set((process.env.CADRE_OPTS ?? "cancel,clear").split(",").filter(Boolean));
+  const OPTS = new Set((process.env.CADRE_OPTS ?? "").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
   let map = "";
@@ -476,14 +467,14 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_before_compact", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
-    if (OPTS.has("cancel") && event.reason === "threshold") {
+    if (event.reason === "threshold") {
       const messages = ctx.sessionManager.buildSessionProjection().messages;
       const spark = modelConfigs(contexts).find((model) => model.id === SERVERS.spark.id)!;
       const tokens =
         (await countTokens("spark", conversationText(messages))) + TEMPLATE_TOKENS_PER_MESSAGE * messages.length + SYSTEM_ALLOWANCE;
       if (tokens + spark.maxTokens <= spark.contextWindow) return { cancel: true };
     }
-    if (OPTS.has("digest")) {
+    {
       const entries = ctx.sessionManager.buildSessionProjection().entries;
       const isUser = (e: any) => e.sourceEntry.type === "message" && e.messages[0]?.role === "user";
       const current = entries.map(isUser).lastIndexOf(true);
@@ -620,7 +611,6 @@ export default async function (pi: ExtensionAPI) {
   // finished with.
   pi.on("turn_end", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
-    if (!OPTS.has("clear")) return undefined;
     const keep = Math.min(KEPT_RESULTS_MAX_TOKENS, resultRoom());
     const edits = await clearResults(event.context.contextEntries, keep, new Set(event.toolResultEntryIds), "to make room");
     return edits.length ? { entries: edits } : undefined;
@@ -630,7 +620,7 @@ export default async function (pi: ExtensionAPI) {
     if (event.outcome !== "completed" || ctx.model?.provider !== PROVIDER) return undefined;
     const last = event.context.contextMessages.at(-1) as any;
     const unanswered = last?.role === "toolResult" || (last?.role === "assistant" && !textOf(last).trim());
-    if (OPTS.has("continue") && unanswered && !continued) {
+    if (unanswered && !continued) {
       continued = true;
       // Pi continues after an assistant message only when new context is added, so a cut-off reply gets a note.
       if (last?.role !== "assistant") return { continue: true };
@@ -638,7 +628,7 @@ export default async function (pi: ExtensionAPI) {
       return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-continue", content, display: false }] };
     }
     if (unanswered) return undefined;
-    if (OPTS.has("research") && !researchAsked) {
+    if (!researchAsked) {
       researchAsked = true;
       const note = unresearched(ctx);
       if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-research", content: note, display: true }] };
@@ -648,7 +638,6 @@ export default async function (pi: ExtensionAPI) {
       const note = sourceCheck(ctx);
       if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: note, display: true }] };
     }
-    if (!OPTS.has("clear")) return undefined;
     const edits = await clearResults(event.context.contextEntries, 0, new Set(), "after the answer");
     return edits.length ? { entries: edits } : undefined;
   });
@@ -716,7 +705,7 @@ export default async function (pi: ExtensionAPI) {
         lines.push(`${where} cites ${url}, which failed to load (${failed.get(url)}) and appears in no tool result that succeeded.`);
       }
     }
-    if (OPTS.has("claims")) {
+    {
       const sessionId = ctx.sessionManager.getSessionId?.();
       // A result does not support the numbers its own call guessed: that search went looking for them.
       const knownFor = knownByCall(branch);
@@ -751,15 +740,11 @@ export default async function (pi: ExtensionAPI) {
     // Runs started by an extension's custom message have no prompt and keep the last one.
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;
-    map = OPTS.has("map") ? projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS) : "";
+    map = projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS);
     symbols = descry ? await descrySymbols(descry.server, event.prompt, SYMBOLS_MAX_CHARS) : "";
-    if (thinkingMode === "auto") {
-      const reasoning = REASONING_PROMPT.test(event.prompt);
-      // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts; think-off, think-low and
-      // think-high force one level for every prompt, for comparing levels on the same tasks.
-      const forced = (["off", "low", "high"] as const).find((level) => OPTS.has(`think-${level}`));
-      pi.setThinkingLevel(forced ?? (OPTS.has("think") ? (reasoning ? "high" : "low") : reasoning ? "medium" : "off"));
-    }
+    // Low thinking for every prompt: off, low and high scored 38, 40 and 27 of 42 on research (high failed to finish one
+    // run of three, off one write-up of three) and the same on coding; /cadre-thinking picks another level.
+    if (thinkingMode === "auto") pi.setThinkingLevel("low");
     return undefined;
   });
 
@@ -771,7 +756,7 @@ export default async function (pi: ExtensionAPI) {
   pi.on("context", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
     let messages = withoutEarlierReasoning(event.messages);
-    if (OPTS.has("recall")) messages = withRecall(messages, ctx) ?? messages;
+    messages = withRecall(messages, ctx) ?? messages;
     return messages === event.messages ? undefined : { messages };
   });
 
