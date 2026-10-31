@@ -713,8 +713,26 @@ export default async function (pi: ExtensionAPI) {
         }));
       // A failed call's error, read with the call that failed (its URL names the site), supports what the answer
       // reports about the failure ("the Britannica URL returns 403").
-      const errors = branch.filter((m) => m.role === "toolResult" && m.isError).map((m) => `${argsOf.get(m.toolCallId) ?? ""}\n${textOf(m)}`);
-      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results];
+      const errors = branch
+        .filter((m) => m.role === "toolResult" && m.isError && !LOCAL_TOOLS.has(m.toolName))
+        .map((m) => `${argsOf.get(m.toolCallId) ?? ""}\n${textOf(m)}`);
+      // A page a web call fetched supports its own URL and the absolute form of its relative links ("](/2026/qa-...)").
+      // Pi's local tools are left out: a write's arguments are the model's own text.
+      const fetched = branch
+        .filter((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))
+        .flatMap((m) =>
+          urls(argsOf.get(m.toolCallId) ?? "").flatMap((page) => {
+            const linked = [...textOf(m).matchAll(/\]\((\/[^)\s]*)\)/g)].flatMap((l) => {
+              try {
+                return [new URL(l[1], page).href];
+              } catch {
+                return [];
+              }
+            });
+            return [page, ...linked];
+          }),
+        );
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, fetched.join("\n")];
       const evidence = results.map((r) => r.text);
       for (const [where, text] of produced) {
         for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence)) {

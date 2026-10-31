@@ -808,6 +808,37 @@ test("a number the answer reports from a failed call (an HTTP status) is support
   assert.equal(result?.continue, undefined, result?.entries?.[0]?.content);
 });
 
+test("a URL is supported by a successful fetch of it, or by a relative link on a page fetched from its site", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "What are the latest research results in the field of ML?";
+  const linked = "https://news.mit.edu/2026/qa-how-ai-came-to-model-messy-human-mind-1023";
+  const fetched = "https://arxiv.org/abs/2610.37398";
+  const { session } = realSession([
+    { role: "user", content: prompt },
+    toolCall("f1", "fetch_content", { url: "https://news.mit.edu/topic/machine-learning" }),
+    toolResult("f1", "fetch_content", "### [Q&A: How AI came to model the messy human mind](/2026/qa-how-ai-came-to-model-messy-human-mind-1023)\nLindquist studies randomness in early AI."),
+    toolCall("f2", "fetch_content", { url: fetched }),
+    toolResult("f2", "fetch_content", "SIGMA: density estimation with principled uncertainty quantification."),
+    answer(`An MIT Q&A covers randomness in early AI: ${linked}. SIGMA covers density estimation: ${fetched}`),
+  ]);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+  const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  assert.equal(result?.continue, undefined, result?.entries?.[0]?.content);
+  // The model's own writes are not sources: a URL found only in a file it wrote stays unsupported.
+  const invented = "https://www.largestknownprimes.com/largest-prime-2018";
+  const { session: own } = realSession([
+    { role: "user", content: prompt },
+    toolCall("w1", "write", { path: "notes.md", content: `Prime record: ${invented}` }),
+    toolResult("w1", "write", "Successfully wrote to notes.md"),
+    answer(`The record is described at ${invented}`),
+  ]);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+  const flagged = await calls.handlers["agent_before_settle"](boundary(own), { ...sessionContext([]), sessionManager: own });
+  assert.match(flagged.entries[0].content, /largestknownprimes\.com\/largest-prime-2018 \(in "[^"]*"\) appears in no source/);
+});
+
 test("a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
