@@ -27,12 +27,13 @@ export interface Unsupported {
 }
 
 const URL = /https?:\/\/[^\s"'<>`|)\]]+/g;
-// Digit groups: commas, thin spaces and plain spaces (299 792 458). In answers a plain-space group must start with one
-// to three digits, so a year next to a count (2024 12) stays two numbers.
-const ANSWER_NUMBER = /(?<![\w.])(?:\d{1,3}(?:[,\u2009\u202f ]\d{3}(?!\d))+|\d+)(?:\.\d+)*/g;
-// A source may also run a power's base into its exponent when superscript formatting is lost ("2^136,279,841" arrives
-// as "2136,279,841"), so a longer first group before comma groups is read as one number too.
-const SOURCE_NUMBER = /(?<![\d.])(?:\d{1,3}(?:[,\u2009\u202f ]\d{3}(?!\d))+|\d+(?:[,\u2009\u202f]\d{3}(?!\d))+|\d+)(?:\.\d+)*/g;
+// Digit groups: commas, thin spaces and plain spaces (299 792 458). A plain-space group must start with one to three
+// digits, so a year next to a count (2024 12) stays two numbers. A source may run a power's base into its exponent when
+// superscript formatting is lost ("2^136,279,841" arrives as "2136,279,841"), and an answer may copy it, so a longer
+// first group before comma or thin-space groups is read as one number in both.
+const GROUPED = "\\d{1,3}(?:[,\\u2009\\u202f ]\\d{3}(?!\\d))+|\\d+(?:[,\\u2009\\u202f]\\d{3}(?!\\d))+|\\d+";
+const ANSWER_NUMBER = new RegExp(`(?<![\\w.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
+const SOURCE_NUMBER = new RegExp(`(?<![\\d.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 // Code and file paths are the model's own material, not claims about sources.
 const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
 const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|[\w.-]+(?:\/[\w.@%+-]+){2,}/g;

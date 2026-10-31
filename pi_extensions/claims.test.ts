@@ -64,6 +64,12 @@ test("a quote is supported only when a source contains it", () => {
   assert.deepEqual(unsupportedClaims(answer, ["…begin: This is the first release of the Linux operating system, and…"]), []);
 });
 
+test("an answer that copies a source's run-together power (2136,279,841) reads it as the same one number", () => {
+  const source = "The largest known prime number is 2136,279,841 − 1, a number that has 41,024,320 digits when written in the decimal system.";
+  assert.deepEqual(unsupportedClaims("| Largest prime | 2136,279,841 − 1 with 41,024,320 decimal digits |", [source]), []);
+  assert.deepEqual(values("It has 2136,279,841 parts."), ["number:2136279841"]);
+});
+
 test("a quoted label of three words or fewer is not a quotation to check", () => {
   // A short label in quotes ("wrong answers believed" for an article title) is the writer's wording, not a quotation.
   assert.deepEqual(values('I could not retrieve the "wrong answers believed" agent study.'), []);
