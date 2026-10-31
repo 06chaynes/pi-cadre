@@ -711,8 +711,9 @@ export default async function (pi: ExtensionAPI) {
           text: (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m),
           guessed: guesses(argsOf.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
         }));
-      // A failed call's error supports what the answer reports about the failure (an HTTP status, say).
-      const errors = branch.filter((m) => m.role === "toolResult" && m.isError).map(textOf);
+      // A failed call's error, read with the call that failed (its URL names the site), supports what the answer
+      // reports about the failure ("the Britannica URL returns 403").
+      const errors = branch.filter((m) => m.role === "toolResult" && m.isError).map((m) => `${argsOf.get(m.toolCallId) ?? ""}\n${textOf(m)}`);
       const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results];
       const evidence = results.map((r) => r.text);
       for (const [where, text] of produced) {

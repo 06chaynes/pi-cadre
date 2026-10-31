@@ -794,14 +794,14 @@ test("a number the answer reports from a failed call (an HTTP status) is support
   const { pi, calls } = fakePi();
   await extension(pi as any);
   const prompt = "What are the latest research results in the field of ML?";
-  const url = "https://towardsdatascience.com/agent-study/";
+  const url = "https://www.britannica.com/animal/sperm-whale";
   const { session } = realSession([
     { role: "user", content: prompt },
     toolCall("f1", "fetch_content", { url }),
-    { ...toolResult("f1", "fetch_content", "Error: HTTP 403 Forbidden"), isError: true },
+    { ...toolResult("f1", "fetch_content", "Error: HTTP 403: Forbidden\n\nFallback options:\n  - Enable the keyless reader fallback"), isError: true },
     toolCall("f2", "fetch_content", { url: "https://arxiv.org/abs/2610.37398" }),
     toolResult("f2", "fetch_content", "SIGMA: density estimation with principled uncertainty quantification."),
-    answer("SIGMA proposes density estimation with uncertainty quantification. The agent study could not be read (the site returned HTTP 403)."),
+    answer("SIGMA proposes density estimation with uncertainty quantification. Item 3's source changed (the Britannica URL returns 403)."),
   ]);
   await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
   const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
