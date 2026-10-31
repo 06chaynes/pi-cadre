@@ -33,6 +33,19 @@ test("taskQueries makes one query per listed item, or one for the whole task", (
   assert.deepEqual(taskQueries("What year was the largest prime found?", "web_search largest prime"), ["What year was the largest prime found? web_search largest prime"]);
 });
 
+test("a task that lists nothing but has several clauses makes one query per clause, plus the current step", () => {
+  // One query for a long write-up prompt recalled at most one passage, and only one sharing 40% of all its terms.
+  const task =
+    "Write docs/idp-roles.md explaining how roles from an identity provider are granted and withdrawn. Cover: where group-to-role mappings are applied at login and in the periodic re-sync, how the provider's role sync mode is read, and how a failed role sync is recorded and cleared.";
+  assert.deepEqual(taskQueries(task, "read auth_oidc.rs"), [
+    "Write docs/idp-roles.md explaining how roles from an identity provider are granted and withdrawn.",
+    "where group-to-role mappings are applied at login and in the periodic re-sync",
+    "how the provider's role sync mode is read",
+    "and how a failed role sync is recorded and cleared.",
+    "read auth_oidc.rs",
+  ]);
+});
+
 test("recall brings back the best passage for each query, within the budget", () => {
   const stored = [
     { source: 'web_search {"query":"largest prime"}', text: primePage },

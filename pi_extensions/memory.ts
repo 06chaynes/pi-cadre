@@ -57,10 +57,24 @@ export function passages(stored: Stored, maxChars: number, from = 0): Passage[] 
   return out;
 }
 
-/** One query per listed item in `task`, or the task and the current step as one query when it lists nothing. */
+// Words a clause needs to be its own query ("Cover" before a colon is not one).
+const MIN_CLAUSE_WORDS = 3;
+
+/**
+ * One query per listed item in `task`; for a task that lists nothing, one per sentence or clause (split at sentence
+ * ends, commas, semicolons and colons) plus the current step; for a task of one clause, the task and the step as one
+ * query. One query for a long write-up prompt recalled at most one passage, and only one sharing 40% of all its terms.
+ */
 export function taskQueries(task: string, step: string): string[] {
   const items = task.split("\n").flatMap((line) => line.match(ITEM)?.[1] ?? []);
-  return items.length >= 2 ? items : [`${task} ${step}`.trim()];
+  if (items.length >= 2) return items;
+  const clauses = task
+    .split(/(?<=[.?!])\s+/)
+    .flatMap((sentence) => sentence.split(/[,;:]\s+/))
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.split(/\s+/).length >= MIN_CLAUSE_WORDS);
+  if (clauses.length >= 2) return step.trim() ? [...clauses, step.trim()] : clauses;
+  return [`${task} ${step}`.trim()];
 }
 
 /**

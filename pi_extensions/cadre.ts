@@ -25,7 +25,7 @@
  */
 
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -813,11 +813,34 @@ export default async function (pi: ExtensionAPI) {
       if (m.role !== "assistant") continue;
       for (const block of m.content ?? []) if (block.type === "toolCall") calls.set(block.id, `${block.name} ${JSON.stringify(block.arguments ?? {})}`);
     }
+    // Local results come back only while current: a read until its file is edited or written, other command output
+    // until any file is. Re-reading is not free for a small model: a write-up on a large repository re-read one file 28
+    // times across three compactions and never wrote the document while cleared reads came back as bare markers.
+    const argsById = new Map<string, any>();
+    for (const m of branch) if (m.role === "assistant") for (const b of m.content ?? []) if (b.type === "toolCall") argsById.set(b.id, b.arguments ?? {});
+    const pathOf = (id: string) => {
+      const path = argsById.get(id)?.path;
+      return typeof path === "string" ? resolve(ctx.cwd ?? ".", path) : undefined;
+    };
+    const lastChange = new Map<string, number>();
+    let lastAnyChange = -1;
+    branch.forEach((m: any, i: number) => {
+      if (m.role !== "toolResult" || (m.toolName !== "edit" && m.toolName !== "write")) return;
+      lastAnyChange = i;
+      const path = pathOf(m.toolCallId);
+      if (path) lastChange.set(path, i);
+    });
+    const current = (m: any, i: number) => {
+      if (!LOCAL_TOOLS.has(m.toolName)) return true;
+      if (m.toolName === "edit" || m.toolName === "write") return false;
+      if (m.toolName === "read") return (lastChange.get(pathOf(m.toolCallId) ?? "") ?? -1) < i;
+      return lastAnyChange < i;
+    };
     // A web result's full text is its saved original when it was shortened, else its text in the session; what is still
     // in context is left out, so only cleared or cut text can come back.
     const sessionId = ctx.sessionManager.getSessionId();
-    const cleared = branch.flatMap((m: any) => {
-      if (m.role !== "toolResult" || m.isError || LOCAL_TOOLS.has(m.toolName)) return [];
+    const cleared = branch.flatMap((m: any, i: number) => {
+      if (m.role !== "toolResult" || m.isError || !current(m, i)) return [];
       const full = loadOriginal(resultsDir(), sessionId, m.toolCallId) ?? textOf(m);
       const visible = new Set((shown.get(m.toolCallId) ?? "").split("\n"));
       const text = full.split("\n").filter((line: string) => !visible.has(line)).join("\n");

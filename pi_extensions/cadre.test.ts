@@ -594,17 +594,12 @@ test("passages of a cleared web result that match the task are restored inside t
   await extension(pi as any);
   const prompt = "Research each of these and write research.md:\n1. The year the largest known prime number was found, and its digits.\n2. The local config path.";
   const prime = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler line\n".repeat(300);
-  const config = "The local config path is /etc/app/largest-prime.conf, found in 2024 digits.\n\n" + "z\n".repeat(2000);
   const { session, ids } = realSession([
     { role: "user", content: prompt },
     toolCall("c1", "web_search", { query: "largest known prime" }),
     toolResult("c1", "web_search", prime),
-    toolCall("c2", "read", { path: "config.txt" }),
-    toolResult("c2", "read", config),
   ]);
-  // Both results were cleared. Only web results are recalled (a file can have changed since it was read).
   session.appendContextEdit(ids[2], { content: "[web_search result cleared]" });
-  session.appendContextEdit(ids[4], { content: "[read result cleared]" });
   const messages = session.buildSessionContext().messages;
   const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
   assert.equal(result.messages.length, messages.length, "nothing is added; passages go back where they came from");
@@ -613,7 +608,6 @@ test("passages of a cleared web result that match the task are restored inside t
   assert.match(restored, /\[web_search result cleared\]/);
   assert.match(restored, /Passages of this result that match the task/);
   assert.match(restored, /41,024,320 digits/);
-  assert.doesNotMatch(JSON.stringify(result.messages[4].content), /etc\/app/);
 
   // Nothing cleared: nothing to recall.
   const { session: fresh } = realSession([{ role: "user", content: prompt }, toolCall("c1", "web_search", { query: "q" }), toolResult("c1", "web_search", prime)]);
@@ -1024,7 +1018,7 @@ test("an edit that leaves a file unparseable is reported in the same tool result
   assert.equal(await calls.handlers["tool_result"](event, { ...uiContext(true).ctx, cwd }), undefined);
 });
 
-test("any extension's tool results are recalled (here pi-web-access's fetch_content), never Pi's local tools", async () => {
+test("any extension's tool results are recalled (here pi-web-access's fetch_content)", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
@@ -1034,6 +1028,43 @@ test("any extension's tool results are recalled (here pi-web-access's fetch_cont
   session.appendContextEdit(ids[2], { content: "[fetch_content result cleared]" });
   const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
   assert.match(JSON.stringify(result.messages[2].content), /41,024,320 digits/);
+});
+
+test("cleared local reads and command output are recalled while unchanged, so a long write-up does not re-read them", async () => {
+  // The real case: a write-up on a large repository read auth_oidc.rs 28 times across three compactions and never
+  // wrote the document, because cleared reads came back as bare markers.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Write docs/idp-roles.md explaining where group-to-role mappings are applied at login. Name the functions and files.";
+  const code = "fn other() {}\n\n".repeat(200) + "/// Applies an identity provider's group-to-role mappings to a user at login.\npub async fn apply_role_mappings(user: &User) {}\n\n" + "fn more() {}\n\n".repeat(200);
+  const grep = "mandible/src/routes/auth_oidc.rs:1430: pub async fn apply_role_mappings(user: &User) -> Result<()> at login";
+  const build = (later: any[]) => {
+    const { session, ids } = realSession([
+      { role: "user", content: prompt },
+      toolCall("r1", "read", { path: "mandible/src/routes/auth_oidc.rs" }),
+      toolResult("r1", "read", code),
+      toolCall("b1", "bash", { command: "rg -n apply_role_mappings mandible/src" }),
+      toolResult("b1", "bash", grep),
+      ...later,
+    ]);
+    session.appendContextEdit(ids[2], { content: "[read result cleared]" });
+    session.appendContextEdit(ids[4], { content: "[bash result cleared]" });
+    return session;
+  };
+  const recalled = async (session: SessionManager) =>
+    JSON.stringify((await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session)))?.messages ?? []);
+  const unchanged = await recalled(build([]));
+  assert.match(unchanged, /Applies an identity provider's group-to-role mappings to a user at login/);
+  assert.match(unchanged, /auth_oidc\.rs:1430/);
+  // After an edit to the file, its earlier read is stale; after any write, earlier command output may be too.
+  const edited = await recalled(build([toolCall("e1", "edit", { path: "mandible/src/routes/auth_oidc.rs", edits: [] }), toolResult("e1", "edit", "Successfully replaced 1 block(s).")]));
+  assert.doesNotMatch(edited, /Applies an identity provider's group-to-role mappings/);
+  assert.doesNotMatch(edited, /auth_oidc\.rs:1430/);
+  // A write to another file leaves the read current.
+  const other = await recalled(build([toolCall("w1", "write", { path: "docs/idp-roles.md", content: "draft" }), toolResult("w1", "write", "Successfully wrote to docs/idp-roles.md")]));
+  assert.match(other, /Applies an identity provider's group-to-role mappings/);
+  assert.doesNotMatch(other, /auth_oidc\.rs:1430/);
 });
 
 test("a hit-structured result is shortened by its hits whatever the tool is called", async () => {
