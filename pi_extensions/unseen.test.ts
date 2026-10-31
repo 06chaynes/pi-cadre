@@ -124,16 +124,33 @@ test("hits whose URL comes last (pi-web-access's format) are recognized the same
   assert.match(short, /Hopfield and Hinton won the 2024 Nobel Prize in Physics\./);
 });
 
-test("when the hits' headings do not fit, each hit keeps an equal share with its source line whole, so no hit is cut off", () => {
-  // The real failure: a cleared result kept its first three hits and dropped the rest at the character limit.
+test("when the hits do not all fit, the hits whose passages best match the request keep them, and a repeated source list is not counted", () => {
+  // The real failure: giving every hit an equal share cut every snippet away, so a cleared Nobel result kept ten source
+  // lines (five hits plus pi-web-access's trailing Sources list) and no winner's name.
   const hit = (snippet: string, title: string, url: string) => `${snippet}\nSource: ${title} (${url})`;
-  const long = (topic: string) => `${topic} ${"and more words about it ".repeat(8)}`;
-  const urls = Array.from({ length: 8 }, (_, i) => `https://site${i}.example/page`);
-  const text = ["**Provider:** searxng", ...urls.map((url, i) => hit(long(`Snippet ${i}`), `Title ${i}`, url))].join("\n\n");
-  const short = shortenHits(text, "first iPhone release year", 1000);
+  const answer = 'The Nobel Prize in Physics 2024 was awarded jointly to John J. Hopfield and Geoffrey Hinton "for foundational discoveries and inventions that enable machine learning with artificial neural networks"';
+  const urls = [
+    "https://www.nobelprize.org/prizes/physics/2024/summary/",
+    "https://en.m.wikipedia.org/wiki/2024",
+    "https://www.nobelprize.org/prizes/physics/2024/press-release/",
+    "https://en.m.wikipedia.org/wiki/2024_United_States_presidential_election",
+    "https://en.wikipedia.org/wiki/List_of_Nobel_laureates_in_Physics",
+  ];
+  const text = [
+    "**Provider:** searxng",
+    hit(answer, "The Nobel Prize in Physics 2024 - NobelPrize.org", urls[0]),
+    hit("2024 (MMXXIV) was a leap year starting on Monday of the Gregorian calendar, the 2024th year of the Common Era (CE) and Anno …", "2024 - Wikipedia", urls[1]),
+    hit(`Oct 8, 2024 · ${answer}`, "Press release: The Nobel Prize in Physics 2024 - NobelPrize.org", urls[2]),
+    hit("According to disinformation experts and intelligence agencies, Russia spread disinformation ahead of the 2024 election to damage …", "2024 United States presidential election - Wikipedia", urls[3]),
+    hit("The Nobel Prize in Physics (Swedish: Nobelpriset i fysik) is awarded annually by the Royal Swedish Academy of Sciences to scientists in the various fields of physics.", "List of Nobel laureates in Physics - Wikipedia", urls[4]),
+    "---",
+    ["**Sources:**", ...urls.map((url, i) => `${i + 1}. Title ${i + 1}\n   ${url}`)].join("\n"),
+  ].join("\n\n");
+  const query = '{"queries":["2024 Nobel Prize in Physics winner"]} Research each of these and write research.md: 4. Who won the 2024 Nobel Prize in Physics.';
+  const short = shortenHits(text, query, 1000);
   assert.ok(short !== undefined && short.length <= 1000, `${short?.length} characters`);
-  for (const url of urls) assert.ok(short.includes(`(${url})`), url);
-  for (let i = 0; i < 8; i++) assert.ok(short.includes(`Snippet ${i}`), `snippet ${i} keeps its start`);
+  assert.match(short, /awarded jointly to John J\. Hopfield and Geoffrey Hinton/);
+  assert.doesNotMatch(short, /\*\*Sources:\*\*/);
 });
 
 test("text that is not a list of search hits is left to shortenText", () => {

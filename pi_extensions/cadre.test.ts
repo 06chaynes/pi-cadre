@@ -496,7 +496,7 @@ test("a cleared result keeps the lines that match its tool call and the request"
   assert.ok(seen[2].length <= 1200, `${seen[2].length} characters`);
 });
 
-test("a cleared search result keeps every hit's source instead of the hits that match a number the model guessed", async () => {
+test("a number the model guessed in its query does not change what a cleared search result keeps", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
@@ -514,19 +514,18 @@ test("a cleared search result keeps every hit's source instead of the hits that 
     hit("What the 1978 date means: the 1978 date is a generic placeholder used for Apple iPhone devices sold without a standard one-year warranty.", "My iphone showing that it has been purchased in 1978", "https://www.reddit.com/r/iPhone13/comments/1ooy9bu/"),
     hit("The 1978 purchase date on an Apple iPhone appears on AS IS units; Apple support explains the 1978 date is a placeholder.", "Why does my iPhone say 1978 - Apple", "https://example.org/iphone-1978"),
   ].join("\n\n") + "\n\n" + "Unrelated trailing text about insurance forms. ".repeat(20);
-  const { session } = realSession([
-    { role: "user", content: prompt },
-    toolCall("c1", "web_search", { queries: ["first iPhone release year 1978 Apple"] }),
-    toolResult("c1", "web_search", page),
-    answer("Done."),
-  ]);
-  const seen = applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])));
-  // Every source stays visible (the Wikipedia hit was dropped entirely before), so the model can fetch the one it
-  // needs. Keeping the answering sentence inside a snippet needs relevance beyond word matching ("unveiling at Macworld
-  // 2007" shares one word with the question); that is a separate step.
-  for (const url of ["discussions.apple.com", "en.wikipedia.org/wiki/IPhone_(1st_generation)", "reddit.com/r/iPhone13", "example.org/iphone-1978"]) assert.ok(seen[2].includes(url), url);
-  assert.match(seen[2], /iPhone \(1st generation\) - Wikipedia/);
-  assert.ok(seen[2].length <= 1300, `${seen[2].length} characters`);
+  const cleared = async (query: string) => {
+    const { session } = realSession([
+      { role: "user", content: prompt },
+      toolCall("c1", "web_search", { queries: [query] }),
+      toolResult("c1", "web_search", page),
+      answer("Done."),
+    ]);
+    return applyEdits(session, await calls.handlers["agent_before_settle"](boundary(session), sessionContext([])))[2];
+  };
+  const guessed = await cleared("first iPhone release year 1978 Apple");
+  assert.equal(guessed, await cleared("first iPhone release year Apple"), "the guessed year changes nothing that is kept");
+  assert.ok(guessed.length <= 1300, `${guessed.length} characters`);
 });
 
 test("once kept extracts pass their budget, the oldest cleared results shrink to a one-line note", async () => {
