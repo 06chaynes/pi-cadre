@@ -252,19 +252,12 @@ test("a large window does not raise the tool result limit above 8,192 tokens", a
   assert.ok(Math.ceil(text.length / 1.8) <= 8192, `${Math.ceil(text.length / 1.8)} Spark tokens`);
 });
 
-/** Runs `body` with the extension loaded under CADRE_OPTS=digest. */
+/** Runs `body` with the extension loaded and both servers answering. */
 async function withDigest(body: (calls: ReturnType<typeof fakePi>["calls"]) => Promise<void>) {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "digest";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    await body(calls);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await body(calls);
 }
 
 /** Projected entries: an earlier compaction summary, then the given messages. */
@@ -533,7 +526,7 @@ test("a number the model guessed in its query does not change what a cleared sea
 
 test("with rerank, a cleared result keeps the passages the reranker scores highest for the request item, and falls back to line matching without it", async () => {
   const saved = { opts: process.env.CADRE_OPTS, fetch: globalThis.fetch };
-  process.env.CADRE_OPTS = "clear,rerank";
+  process.env.CADRE_OPTS = "rerank";
   try {
     serveProps({ 8080: 32768, 8081: 16384 });
     const { pi, calls } = fakePi();
@@ -598,72 +591,58 @@ test("once kept extracts pass their budget, the oldest cleared results shrink to
 /** Context for a hook that reads the session's branch. */
 const toolContext = (session: SessionManager) => ({ ...uiContext(true, { provider: "llama-cpp", id: "cadre" }).ctx, sessionManager: session });
 
-test("with recall, passages of a cleared web result that match the task are restored inside that result", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "clear,recall";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const prompt = "Research each of these and write research.md:\n1. The year the largest known prime number was found, and its digits.\n2. The local config path.";
-    const prime = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler line\n".repeat(300);
-    const config = "The local config path is /etc/app/largest-prime.conf, found in 2024 digits.\n\n" + "z\n".repeat(2000);
-    const { session, ids } = realSession([
-      { role: "user", content: prompt },
-      toolCall("c1", "web_search", { query: "largest known prime" }),
-      toolResult("c1", "web_search", prime),
-      toolCall("c2", "read", { path: "config.txt" }),
-      toolResult("c2", "read", config),
-    ]);
-    // Both results were cleared. Only web results are recalled (a file can have changed since it was read).
-    session.appendContextEdit(ids[2], { content: "[web_search result cleared]" });
-    session.appendContextEdit(ids[4], { content: "[read result cleared]" });
-    const messages = session.buildSessionContext().messages;
-    const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
-    assert.equal(result.messages.length, messages.length, "nothing is added; passages go back where they came from");
-    const restored = JSON.stringify(result.messages[2].content);
-    assert.equal(result.messages[2].role, "toolResult");
-    assert.match(restored, /\[web_search result cleared\]/);
-    assert.match(restored, /Passages of this result that match the task/);
-    assert.match(restored, /41,024,320 digits/);
-    assert.doesNotMatch(JSON.stringify(result.messages[4].content), /etc\/app/);
+test("passages of a cleared web result that match the task are restored inside that result", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research each of these and write research.md:\n1. The year the largest known prime number was found, and its digits.\n2. The local config path.";
+  const prime = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler line\n".repeat(300);
+  const config = "The local config path is /etc/app/largest-prime.conf, found in 2024 digits.\n\n" + "z\n".repeat(2000);
+  const { session, ids } = realSession([
+    { role: "user", content: prompt },
+    toolCall("c1", "web_search", { query: "largest known prime" }),
+    toolResult("c1", "web_search", prime),
+    toolCall("c2", "read", { path: "config.txt" }),
+    toolResult("c2", "read", config),
+  ]);
+  // Both results were cleared. Only web results are recalled (a file can have changed since it was read).
+  session.appendContextEdit(ids[2], { content: "[web_search result cleared]" });
+  session.appendContextEdit(ids[4], { content: "[read result cleared]" });
+  const messages = session.buildSessionContext().messages;
+  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  assert.equal(result.messages.length, messages.length, "nothing is added; passages go back where they came from");
+  const restored = JSON.stringify(result.messages[2].content);
+  assert.equal(result.messages[2].role, "toolResult");
+  assert.match(restored, /\[web_search result cleared\]/);
+  assert.match(restored, /Passages of this result that match the task/);
+  assert.match(restored, /41,024,320 digits/);
+  assert.doesNotMatch(JSON.stringify(result.messages[4].content), /etc\/app/);
 
-    // Nothing cleared: nothing to recall.
-    const { session: fresh } = realSession([{ role: "user", content: prompt }, toolCall("c1", "web_search", { query: "q" }), toolResult("c1", "web_search", prime)]);
-    assert.equal(await calls.handlers["context"]({ type: "context", messages: fresh.buildSessionContext().messages }, toolContext(fresh)), undefined);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+  // Nothing cleared: nothing to recall.
+  const { session: fresh } = realSession([{ role: "user", content: prompt }, toolCall("c1", "web_search", { query: "q" }), toolResult("c1", "web_search", prime)]);
+  assert.equal(await calls.handlers["context"]({ type: "context", messages: fresh.buildSessionContext().messages }, toolContext(fresh)), undefined);
 });
 
-test("with recall, passages of a result that compaction removed come back right after the summary as tool output", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "clear,recall";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Who won the 2024 Nobel Prize in Physics.";
-    const { session, ids } = realSession([
-      { role: "user", content: prompt },
-      toolCall("c1", "web_search", { query: "largest known prime" }),
-      toolResult("c1", "web_search", "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(300)),
-      toolCall("c2", "web_search", { query: "nobel physics 2024" }),
-      toolResult("c2", "web_search", "Hopfield and Hinton won the 2024 Nobel Prize in Physics."),
-    ]);
-    session.appendCompaction("Researching two facts.", ids[3], 20_000);
-    const messages = session.buildSessionContext().messages;
-    const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
-    const [call, back] = result.messages.slice(1, 3);
-    assert.equal(call.role, "assistant");
-    assert.deepEqual([back.role, back.toolName], ["toolResult", "recall"]);
-    assert.match(JSON.stringify(back.content), /41,024,320 digits/);
-    assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+test("passages of a result that compaction removed come back right after the summary as tool output", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Who won the 2024 Nobel Prize in Physics.";
+  const { session, ids } = realSession([
+    { role: "user", content: prompt },
+    toolCall("c1", "web_search", { query: "largest known prime" }),
+    toolResult("c1", "web_search", "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(300)),
+    toolCall("c2", "web_search", { query: "nobel physics 2024" }),
+    toolResult("c2", "web_search", "Hopfield and Hinton won the 2024 Nobel Prize in Physics."),
+  ]);
+  session.appendCompaction("Researching two facts.", ids[3], 20_000);
+  const messages = session.buildSessionContext().messages;
+  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  const [call, back] = result.messages.slice(1, 3);
+  assert.equal(call.role, "assistant");
+  assert.deepEqual([back.role, back.toolName], ["toolResult", "recall"]);
+  assert.match(JSON.stringify(back.content), /41,024,320 digits/);
+  assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
 });
 
 test("reasoning from earlier steps leaves the request; the latest step keeps its own", async () => {
@@ -711,9 +690,8 @@ test("an oversized search result keeps every hit, a cut read says how to see mor
   assert.match(read.content.map((c: any) => c.text).join(""), /Read again with offset and limit to see other parts\./);
 });
 
-test("with recall, a passage cut from a shortened web result comes back from its saved original, for the item it answers", async () => {
-  const saved = { opts: process.env.CADRE_OPTS, state: process.env.XDG_STATE_HOME };
-  process.env.CADRE_OPTS = "clear,recall";
+test("a passage cut from a shortened web result comes back from its saved original, for the item it answers", async () => {
+  const saved = process.env.XDG_STATE_HOME;
   process.env.XDG_STATE_HOME = (await import("node:fs")).mkdtempSync(join(tmpdir(), "cadre-state-"));
   try {
     serveProps({ 8080: 32768, 8081: 16384 });
@@ -735,10 +713,8 @@ test("with recall, a passage cut from a shortened web result comes back from its
     const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, ctx);
     assert.match(JSON.stringify(result.messages.at(-1).content), /Hopfield and Hinton won the 2024 Nobel Prize in Physics/);
   } finally {
-    for (const [key, value] of [["CADRE_OPTS", saved.opts], ["XDG_STATE_HOME", saved.state]] as const) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    if (saved === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = saved;
   }
 });
 
@@ -816,123 +792,95 @@ test("a URL cited only from a failed call gets one corrective step at the end of
   assert.equal(ok?.continue, undefined, "a URL that also loaded is fine");
 });
 
-test("with claims, a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "claims";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const prompt = "Research the year the first iPhone was released and write research.md.";
-    const build = (row: string, final: string) =>
-      realSession([
-        { role: "user", content: prompt },
-        toolCall("s1", "web_search", { query: "first iPhone release year" }),
-        toolResult("s1", "web_search", "The first iPhone was released on June 29, 2007 in the United States.\n\nApple Newsroom, 2007."),
-        toolCall("w1", "write", { path: "research.md", content: `| Item | Answer |\n| --- | --- |\n${row}\n` }),
-        toolResult("w1", "write", "Successfully wrote to research.md"),
-        answer(final),
-      ]).session;
-    const settle = async (session: SessionManager) => {
-      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
-      const ctx = { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => 'Rule: "Emit ONLY code inside markdown blocks with exact language tags."' };
-      return calls.handlers["agent_before_settle"](boundary(session), ctx);
-    };
-    const wrong = await settle(build("| First iPhone | 1978 |", "Done. research.md is written."));
-    assert.equal(wrong.continue, true);
-    const [note] = wrong.entries;
-    assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
-    assert.match(note.content, /research\.md: 1978 \(in "\| First iPhone \| 1978 \|"\)/);
-    assert.match(note.content, /closest source passage: "The first iPhone was released on June 29, 2007/);
-    assert.match(note.content, /correct it from a source, show how it was computed from one, or remove it/);
-    const right = await settle(build("| First iPhone | 2007 |", 'Done. I followed "Emit ONLY code inside markdown blocks with exact language tags."'));
-    assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+test("a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research the year the first iPhone was released and write research.md.";
+  const build = (row: string, final: string) =>
+    realSession([
+      { role: "user", content: prompt },
+      toolCall("s1", "web_search", { query: "first iPhone release year" }),
+      toolResult("s1", "web_search", "The first iPhone was released on June 29, 2007 in the United States.\n\nApple Newsroom, 2007."),
+      toolCall("w1", "write", { path: "research.md", content: `| Item | Answer |\n| --- | --- |\n${row}\n` }),
+      toolResult("w1", "write", "Successfully wrote to research.md"),
+      answer(final),
+    ]).session;
+  const settle = async (session: SessionManager) => {
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    const ctx = { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => 'Rule: "Emit ONLY code inside markdown blocks with exact language tags."' };
+    return calls.handlers["agent_before_settle"](boundary(session), ctx);
+  };
+  const wrong = await settle(build("| First iPhone | 1978 |", "Done. research.md is written."));
+  assert.equal(wrong.continue, true);
+  const [note] = wrong.entries;
+  assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
+  assert.match(note.content, /research\.md: 1978 \(in "\| First iPhone \| 1978 \|"\)/);
+  assert.match(note.content, /closest source passage: "The first iPhone was released on June 29, 2007/);
+  assert.match(note.content, /correct it from a source, show how it was computed from one, or remove it/);
+  const right = await settle(build("| First iPhone | 2007 |", 'Done. I followed "Emit ONLY code inside markdown blocks with exact language tags."'));
+  assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
 });
 
-test("with claims, a value found only through a search that already guessed it gets a corrective step that says so", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "claims";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const prompt = "Research the year the first iPhone was released and write research.md.";
-    const settle = async (query: string) => {
-      const session = realSession([
-        { role: "user", content: prompt },
-        toolCall("s1", "web_search", { queries: [query] }),
-        toolResult("s1", "web_search", "My iPhone says it was purchased on April 1 1978; the 1978 date is a placeholder for AS IS iPhones."),
-        toolCall("w1", "write", { path: "research.md", content: "| First iPhone released | 1978 |\n" }),
-        toolResult("w1", "write", "Successfully wrote to research.md"),
-        answer("Done."),
-      ]).session;
-      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
-      return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => "" });
-    };
-    const guessed = await settle("first iPhone release year 1978 Apple");
-    assert.equal(guessed.continue, true);
-    assert.match(guessed.entries[0].content, /research\.md: 1978 .* appears only in results of a search that already contained it/);
-    assert.equal((await settle("first iPhone release year"))?.continue, undefined, "found by a search that did not contain it");
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+test("a value found only through a search that already guessed it gets a corrective step that says so", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research the year the first iPhone was released and write research.md.";
+  const settle = async (query: string) => {
+    const session = realSession([
+      { role: "user", content: prompt },
+      toolCall("s1", "web_search", { queries: [query] }),
+      toolResult("s1", "web_search", "My iPhone says it was purchased on April 1 1978; the 1978 date is a placeholder for AS IS iPhones."),
+      toolCall("w1", "write", { path: "research.md", content: "| First iPhone released | 1978 |\n" }),
+      toolResult("w1", "write", "Successfully wrote to research.md"),
+      answer("Done."),
+    ]).session;
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => "" });
+  };
+  const guessed = await settle("first iPhone release year 1978 Apple");
+  assert.equal(guessed.continue, true);
+  assert.match(guessed.entries[0].content, /research\.md: 1978 .* appears only in results of a search that already contained it/);
+  assert.equal((await settle("first iPhone release year"))?.continue, undefined, "found by a search that did not contain it");
 });
 
-test("with research, a question about the world answered without any source gets one step asking for a search", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "research";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const settle = async (prompt: string, run: any[], tools: string[]) => {
-      calls.activeTools = tools;
-      await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
-      const { session } = realSession([{ role: "user", content: prompt }, ...run]);
-      return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
-    };
-    const whale = "How long can a sperm whale hold its breath while diving on average?";
-    const web = ["read", "bash", "edit", "write", "web_search", "fetch_content"];
-    const fromMemory = await settle(whale, [answer("About 3 to 4 minutes.")], web);
-    assert.equal(fromMemory.continue, true);
-    const [note] = fromMemory.entries;
-    assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-research"]);
-    assert.match(note.content, /without any source/);
-    assert.match(note.content, /web_search, fetch_content/);
-    const searched = [toolCall("s1", "web_search", { query: "sperm whale dive" }), toolResult("s1", "web_search", "Dives last 45 to 60 minutes."), answer("About 45 minutes.")];
-    assert.equal((await settle(whale, searched, web))?.continue, undefined, "a run that fetched a source passes");
-    const failed = [toolCall("s1", "web_search", { query: "x" }), { ...toolResult("s1", "web_search", "Error: 429"), isError: true }, answer("About 3 minutes.")];
-    assert.equal((await settle(whale, failed, web)).entries[0].customType, "cadre-research", "a failed search is no source");
-    assert.equal((await settle(whale, [answer("About 3 minutes.")], ["read", "bash"]))?.continue, undefined, "no tool to search with");
-    const local = "What does Inventory.available in inventory/store.py return?";
-    assert.equal((await settle(local, [answer("Stock minus reservations.")], web))?.continue, undefined, "questions about local code");
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+test("a question about the world answered without any source gets one step asking for a search", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const settle = async (prompt: string, run: any[], tools: string[]) => {
+    calls.activeTools = tools;
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    const { session } = realSession([{ role: "user", content: prompt }, ...run]);
+    return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  };
+  const whale = "How long can a sperm whale hold its breath while diving on average?";
+  const web = ["read", "bash", "edit", "write", "web_search", "fetch_content"];
+  const fromMemory = await settle(whale, [answer("About 3 to 4 minutes.")], web);
+  assert.equal(fromMemory.continue, true);
+  const [note] = fromMemory.entries;
+  assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-research"]);
+  assert.match(note.content, /without any source/);
+  assert.match(note.content, /web_search, fetch_content/);
+  const searched = [toolCall("s1", "web_search", { query: "sperm whale dive" }), toolResult("s1", "web_search", "Dives last 45 to 60 minutes."), answer("About 45 minutes.")];
+  assert.equal((await settle(whale, searched, web))?.continue, undefined, "a run that fetched a source passes");
+  const failed = [toolCall("s1", "web_search", { query: "x" }), { ...toolResult("s1", "web_search", "Error: 429"), isError: true }, answer("About 3 minutes.")];
+  assert.equal((await settle(whale, failed, web)).entries[0].customType, "cadre-research", "a failed search is no source");
+  assert.equal((await settle(whale, [answer("About 3 minutes.")], ["read", "bash"]))?.continue, undefined, "no tool to search with");
+  const local = "What does Inventory.available in inventory/store.py return?";
+  assert.equal((await settle(local, [answer("Stock minus reservations.")], web))?.continue, undefined, "questions about local code");
 });
 
-test("with map, the system message lists the project's files", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "map";
-  try {
-    serveProps({});
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "What does pi_extensions/router.ts do?" }, uiContext(true).ctx);
-    const system = { role: "system", content: "Pi system prompt" };
-    await calls.handlers["context_with_system"]({ messages: [system] });
-    assert.match(system.content, /Project files \(paths relative to the working directory\):/);
-    assert.match(system.content, /pi_extensions\/router\.ts/);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+test("the system message lists the project's files", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "What does pi_extensions/router.ts do?" }, uiContext(true).ctx);
+  const system = { role: "system", content: "Pi system prompt" };
+  await calls.handlers["context_with_system"]({ messages: [system] });
+  assert.match(system.content, /Project files \(paths relative to the working directory\):/);
+  assert.match(system.content, /pi_extensions\/router\.ts/);
 });
 
 test("with descry, the session starts descry's MCP server, each prompt lists its symbols, and shutdown stops it", async () => {
@@ -1004,22 +952,15 @@ test("with thinking on, each request gets a thinking budget well below its reply
 });
 
 test("a run whose last reply was cut off with no answer continues with a note, which Pi needs after an assistant message", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "continue";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const cut = { ...toolCall("x", "x", {}), content: [{ type: "thinking", thinking: "deliberating ".repeat(500) }], stopReason: "length" };
-    const { session } = realSession([{ role: "user", content: "Research six facts" }, cut]);
-    const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
-    assert.equal(result.continue, true);
-    assert.deepEqual([result.entries[0].type, result.entries[0].customType], ["custom_message", "cadre-continue"]);
-    assert.match(result.entries[0].content, /cut off .* before any answer or tool call/);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const cut = { ...toolCall("x", "x", {}), content: [{ type: "thinking", thinking: "deliberating ".repeat(500) }], stopReason: "length" };
+  const { session } = realSession([{ role: "user", content: "Research six facts" }, cut]);
+  const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  assert.equal(result.continue, true);
+  assert.deepEqual([result.entries[0].type, result.entries[0].customType], ["custom_message", "cadre-continue"]);
+  assert.match(result.entries[0].content, /cut off .* before any answer or tool call/);
 });
 
 test("an edit that leaves a file unparseable is reported in the same tool result", async () => {
@@ -1037,22 +978,15 @@ test("an edit that leaves a file unparseable is reported in the same tool result
 });
 
 test("any extension's tool results are recalled (here pi-web-access's fetch_content), never Pi's local tools", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "clear,recall";
-  try {
-    serveProps({ 8080: 32768, 8081: 16384 });
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Tokyo population.";
-    const page = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(400);
-    const { session, ids } = realSession([{ role: "user", content: prompt }, toolCall("f1", "fetch_content", { url: "https://x.example" }), toolResult("f1", "fetch_content", page)]);
-    session.appendContextEdit(ids[2], { content: "[fetch_content result cleared]" });
-    const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
-    assert.match(JSON.stringify(result.messages[2].content), /41,024,320 digits/);
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research each of these:\n1. The year the largest known prime number was found, and its digits.\n2. Tokyo population.";
+  const page = "The largest known prime number is 2^136,279,841 - 1, with 41,024,320 digits, found in October 2024.\n\n" + "filler\n".repeat(400);
+  const { session, ids } = realSession([{ role: "user", content: prompt }, toolCall("f1", "fetch_content", { url: "https://x.example" }), toolResult("f1", "fetch_content", page)]);
+  session.appendContextEdit(ids[2], { content: "[fetch_content result cleared]" });
+  const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+  assert.match(JSON.stringify(result.messages[2].content), /41,024,320 digits/);
 });
 
 test("a hit-structured result is shortened by its hits whatever the tool is called", async () => {
@@ -1068,32 +1002,25 @@ test("a hit-structured result is shortened by its hits whatever the tool is call
   assert.match(out, /^\[Result shortened from [\d,]+ characters: every hit's title and URL/);
 });
 
-test("with neutral, numbers a search query adds that no request or earlier result contains are removed", async () => {
-  const saved = process.env.CADRE_OPTS;
-  process.env.CADRE_OPTS = "neutral";
-  try {
-    serveProps({});
-    const { pi, calls } = fakePi();
-    await extension(pi as any);
-    const { session } = realSession([
-      { role: "user", content: "Research: 1. The year the first iPhone was released. 2. Who won the 2024 Nobel Prize in Physics." },
-      toolCall("s0", "web_search", { query: "tungsten" }),
-      toolResult("s0", "web_search", "Tungsten melts at 3422 °C."),
-    ]);
-    const ctx = { ...uiContext(true).ctx, sessionManager: session };
-    // The real case: "1978" in the query pulled up pages about a 1978 date bug instead of the 2007 release.
-    const iphone = { toolName: "web_search", input: { query: "first iPhone release year 1978 Apple" } };
-    await calls.handlers["tool_call"](iphone, ctx);
-    assert.equal(iphone.input.query, "first iPhone release year Apple");
-    // Numbers from the request (2024) or an earlier result (3422) stay; list form (pi-web-access) is handled too.
-    const kept = { toolName: "web_search", input: { queries: ["2024 Nobel Prize Physics", "tungsten 3422 melting point 1989"] } };
-    await calls.handlers["tool_call"](kept, ctx);
-    assert.deepEqual(kept.input.queries, ["2024 Nobel Prize Physics", "tungsten 3422 melting point"]);
-    const local = { toolName: "bash", input: { command: "grep -n 1978 notes.txt" } };
-    await calls.handlers["tool_call"](local, ctx);
-    assert.equal(local.input.command, "grep -n 1978 notes.txt");
-  } finally {
-    if (saved === undefined) delete process.env.CADRE_OPTS;
-    else process.env.CADRE_OPTS = saved;
-  }
+test("numbers a search query adds that no request or earlier result contains are removed", async () => {
+  serveProps({});
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const { session } = realSession([
+    { role: "user", content: "Research: 1. The year the first iPhone was released. 2. Who won the 2024 Nobel Prize in Physics." },
+    toolCall("s0", "web_search", { query: "tungsten" }),
+    toolResult("s0", "web_search", "Tungsten melts at 3422 °C."),
+  ]);
+  const ctx = { ...uiContext(true).ctx, sessionManager: session };
+  // The real case: "1978" in the query pulled up pages about a 1978 date bug instead of the 2007 release.
+  const iphone = { toolName: "web_search", input: { query: "first iPhone release year 1978 Apple" } };
+  await calls.handlers["tool_call"](iphone, ctx);
+  assert.equal(iphone.input.query, "first iPhone release year Apple");
+  // Numbers from the request (2024) or an earlier result (3422) stay; list form (pi-web-access) is handled too.
+  const kept = { toolName: "web_search", input: { queries: ["2024 Nobel Prize Physics", "tungsten 3422 melting point 1989"] } };
+  await calls.handlers["tool_call"](kept, ctx);
+  assert.deepEqual(kept.input.queries, ["2024 Nobel Prize Physics", "tungsten 3422 melting point"]);
+  const local = { toolName: "bash", input: { command: "grep -n 1978 notes.txt" } };
+  await calls.handlers["tool_call"](local, ctx);
+  assert.equal(local.input.command, "grep -n 1978 notes.txt");
 });
