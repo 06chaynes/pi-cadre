@@ -100,25 +100,34 @@ code, so none of this depends on the model remembering to do it:
 
 - **Real sizes.** Each server's per-slot window is read from llama-server, and each request's reply limit is set from
   the request's actual token count.
-- **Tool results fit.** A result larger than its share of the window is shortened. Search results keep every hit's
-  title and URL plus the passages that best match the search and your request; other results keep their opening and
-  the matching lines, with a note on how to see the rest. Parallel calls share the room. A web search asking for more
-  than 5 results is capped at 5.
+- **Tool results fit.** A result larger than its share of the window is shortened. Search results keep each hit's
+  title and URL and the passages that best match the search and your request; other results keep their opening and
+  the matching lines, with a note on how to see the rest. Parallel calls share the room.
 - **Old results leave; useful passages come back.** During a task, results the model has already read are replaced
   by a short extract once they pass a budget. Passages of cleared web results that match the task are restored inside
   the result they came from (one query per listed item, ranked with BM25). The full text of shortened web results is
   kept in `~/.local/state/pi-cadre/results/` for a week so these passages can come from the cut part too.
+- **Searches carry what is known, not guesses.** A number in a search query that neither your request nor an earlier
+  result contains is removed before the search runs, and such numbers never decide which parts of a result are kept.
+  With a guessed year in the query, a search for the first iPhone's release year returned pages about a date bug and
+  the answer was wrong in 8 of 10 samples; without it, in 0 of 10.
 - **Compaction without a model.** When compaction is still needed, earlier questions and the current request's earlier
   steps are condensed by code: the request verbatim, then each step's call and outcome.
 - **Project files and the date.** The system message lists the project's files (from git, bounded in size) and
   today's date, which Pi's own prompt does not include.
 - **Broken edits are reported.** After an edit or write, the file is parsed (Python, JavaScript, TypeScript, Rust, or
   Go, when the parser is installed) and a syntax error is reported in the same tool result.
-- **Thinking.** THINKING_DEFAULT Every request with thinking on gets a thinking budget well below its reply limit, so
-  reasoning cannot use up a reply.
-- **Recovery.** A reply cut off before any answer or tool call continues once. If the answer, or a file written in the
-  run, cites a URL that appeared only in failed calls, the model gets one step to replace it. Path-guard blocks say
-  what to do instead and list matching project files.
+- **Thinking.** Thinking is low for every prompt. On a 12-item research task, off, low and high scored 38, 40 and 27
+  of 42 over three runs each (high over-checked and failed to finish one run, off over-explored and failed to finish
+  one write-up); on coding all three passed. Every request with thinking on gets a thinking budget well below its
+  reply limit, so reasoning cannot use up a reply.
+- **Answers are checked against their sources.** When a run ends, numbers, quotes and URLs in the answer, or in a
+  prose file written in the run, are matched against what the tools returned, in a passage about the same item. A
+  value with no source, or found only through a search that already guessed it, or a URL that only failed to load, gets
+  one step that names it and quotes the closest source passage. A question about the world answered without any source
+  gets one step asking for a search with the installed tools.
+- **Recovery.** A reply cut off before any answer or tool call continues once. Path-guard blocks say what to do
+  instead and list matching project files.
 - **Routing.** LFM3 answers questions about local code; edits start on LFM3 and finish on Spark; everything else runs
   on Spark.
 
@@ -126,7 +135,7 @@ Pi commands added by the extension:
 
 - `/cadre-status`: health, model file, and per-slot context of both servers, and whether `cadre` can route to LFM3.
 - `/cadre-start`: starts the servers that are not running.
-- `/cadre-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, diagnosis, debugging, investigation, or review run with medium thinking, and all others run with thinking off.
+- `/cadre-thinking auto|off|minimal|low|medium|high`: `auto` (the default) uses low thinking for every prompt; another level applies to every prompt until changed.
 - `/cadre-guard on|off`: path guard, on by default. Writes and edits must stay inside the working directory. Reads, searches, and bash commands may also use system directories (`/usr`, `/etc`, `/opt`, and similar) but nothing else outside the working directory, including its parent, your home directory, and `/tmp`. Bash commands are checked by the paths written in them, so it catches mistakes rather than acting as a sandbox.
 
 ## Python client
@@ -175,7 +184,7 @@ Each task description in B and C states the fix. C passes when that exact text a
 | `setup_wizard.py`, `install.sh`, `install.bat` | Installer |
 | `cadre_config.env` | Server settings read by the launchers |
 | `launchers/` | Server and Pi launchers |
-| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts`, and the context modules (`tokens.ts`, `text.ts`, `unseen.ts`, `memory.ts`, `originals.ts`, `projectmap.ts`, `syntax.ts`) |
+| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts`, and the context modules (`tokens.ts`, `text.ts`, `unseen.ts`, `memory.ts`, `originals.ts`, `projectmap.ts`, `syntax.ts`, `claims.ts`) |
 | `llama_cpp_client.py` | llama-server client and routing policies |
 | `repo_indexer.py` | AST symbol scan and function slicing |
 | `benchmark_tasks.py` | Benchmark task data |

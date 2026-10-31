@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Long tasks keep their context in code, never by asking the model:
+  - Tool results the model has read stay in full while they fit; older ones are cleared to their opening and the lines
+    matching their call and the request (previously a cleared result was dropped whole).
+  - When the conversation still fits, threshold compaction is cancelled; when it does not, earlier steps of the current
+    request are condensed in code (the request verbatim, each call and its outcome) instead of by a model summary.
+  - Passages of cleared web results that match the task come back inside the result they came from (BM25, one query
+    per listed item), from the full original kept on disk per session (`~/.local/state/pi-cadre/results`, 7 days).
+  - Earlier steps' reasoning leaves each request (Spark's template renders all of it).
+- End-of-run source check: one corrective step when the answer, or a prose file written in the run, holds a number,
+  quote or URL that no source passage about the same item supports, a value found only through a search that already
+  contained it, or a URL that only failed to load. Offline it raised no false alarms in 45 coding sessions; in replays
+  Spark searched again or re-read sources after the note in 28 of 30 samples; live it fired twice in 18 questions, both
+  justified, both fixed.
+- Research check: a question about the world answered without any source gets one step asking for a search with the
+  installed tools. In replays Spark searched after the note in 60 of 60 samples.
+- Search queries lose numbers that no request or earlier result contains (the model's guesses): a guessed "1978" in
+  the iPhone query led to the wrong year in 8 of 10 replays, 0 of 10 without it.
+- Project file map in the system message: Spark read a named file directly 10/10 with it, 2/10 without.
+- Today's date in the system message: searches for "latest" named the current year 10/10 with it, 0/10 without.
+- Syntax check after edit and write (Python, JavaScript, TypeScript, Rust, Go, when the parser is installed) reports a
+  broken file in the same tool result.
+- Path-guard blocks say the way forward and list matching project files.
+- Web results from any tool are shortened by their hits (each hit's title and URL, best passages first).
+- `launchers/searxng.sh` / `.bat`: set up, check and tear down a local SearXNG for web search without an API key.
+
+### Changed
+
+- Thinking is low by default for every prompt, with a per-request budget (1,024 tokens low, 4,096 high, at most half
+  the reply limit). Off vs low vs high: research 38/42, 40/42, 27/42 (high failed to finish one run); write-up 2/3,
+  3/3, 3/3 finished; coding 12/12 at every level.
+- An edit that starts on LFM3 continues on Spark (local-code tasks 30/30 vs 28/30 on LFM3 alone).
+- The reply limit is set from the measured request size (stale limits of 1 or 17 tokens previously cut replies).
+- The web search result-count cap is removed; results are shortened by their hits instead.
+
+### Fixed
+
+- Clearing never applied (context edits were sent in the wrong shape).
+- Six parallel searches overflowed the context (39,699 tokens): parallel calls now share the room for new results.
+- Thinking could use a whole reply and leave no answer; a reply cut off at the limit now continues.
+- Product names in camel case (iPhone, eBay, macOS) routed research questions to LFM3 as local code.
+- Numbers the model guessed in a query no longer decide which lines of a result are kept (the iPhone case kept four
+  1978 passages and dropped the 2007 one).
+- Security: recall never arrives as a user turn; syntax checkers run isolated (`python -I`, neutral directory); git and
+  llama-server never run from the project directory, so a planted `git` there cannot run on Windows; the project map
+  runs git with fsmonitor off; reads follow regular files only.
+
 ## [0.2.2]
 
 ### Fixed
