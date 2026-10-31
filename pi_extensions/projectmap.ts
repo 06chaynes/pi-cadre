@@ -6,6 +6,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Directories a listing outside git skips (dependencies, builds, caches, version control), and tool caches that are
@@ -18,8 +19,10 @@ const HEADING = "Project files (paths relative to the working directory):";
 /** Relative paths of the project's files: git's tracked and untracked-but-not-ignored files, else a directory walk. */
 function projectFiles(cwd: string): string[] {
   try {
-    // core.fsmonitor in a repository's own config names a command git would run; it stays off.
-    const out = execFileSync("git", ["-c", "core.fsmonitor=false", "ls-files", "--cached", "--others", "--exclude-standard"], { cwd, encoding: "utf8", timeout: 3000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    // core.fsmonitor in a repository's own config names a command git would run; it stays off. git runs from a neutral
+    // directory with the project passed as -C: Windows looks a bare command up in the working directory before PATH, so
+    // a git.exe committed to the project would otherwise run.
+    const out = execFileSync("git", ["-C", cwd, "-c", "core.fsmonitor=false", "ls-files", "--cached", "--others", "--exclude-standard"], { cwd: tmpdir(), encoding: "utf8", timeout: 3000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
     return out.split("\n").filter((file) => file && !TOOL_CACHES.some((dir) => file.startsWith(dir))).slice(0, MAX_FILES);
   } catch {
     const files: string[] = [];

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 
 import { projectMap } from "./projectmap.ts";
@@ -19,6 +19,23 @@ function project(files: string[], gitignore?: string) {
   }
   return dir;
 }
+
+test("a git program planted in the project is never run, even where the working directory is searched first", () => {
+  // Windows looks up a bare command in the spawn's working directory before PATH; "." first on PATH does the same here.
+  const dir = project(["inventory/store.py"], "");
+  const marker = join(dir, "planted-git-ran");
+  writeFileSync(join(dir, "git"), `#!/bin/sh\ntouch '${marker}'\n`);
+  chmodSync(join(dir, "git"), 0o755);
+  const saved = process.env.PATH;
+  process.env.PATH = `.${delimiter}${saved}`;
+  try {
+    const map = projectMap(dir, "", 2000);
+    assert.ok(map.includes("inventory/store.py"), map);
+  } finally {
+    process.env.PATH = saved;
+  }
+  assert.equal(existsSync(marker), false, "the project's own git ran");
+});
 
 test("descry's index cache is not listed as project files", () => {
   for (const gitignore of [undefined, ""]) {

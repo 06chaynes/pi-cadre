@@ -5,7 +5,8 @@
 
 import { spawn } from "node:child_process";
 import { chmodSync, constants, mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const HOST = "127.0.0.1";
 const THINKING_ENABLED = { $var: "thinking.enabled" };
@@ -114,7 +115,12 @@ export function openLog(dir: string, key: ServerKey): { path: string; fd: number
  */
 export function startServer(key: ServerKey, env: Record<string, string | undefined>, logDir: string): Promise<string> {
   const log = openLog(logDir, key);
-  const child = spawn("llama-server", serverArgs(key, env), { detached: true, stdio: ["ignore", log.fd, log.fd] });
+  // llama-server runs from a neutral directory: Windows looks a bare command up in the working directory (Pi's project)
+  // before PATH, so a llama-server.exe committed to a project would otherwise run. A relative model path is resolved
+  // against that project first.
+  const model = env[SERVERS[key].modelEnv];
+  const resolved = model?.endsWith(".gguf") && !isAbsolute(model) ? { ...env, [SERVERS[key].modelEnv]: resolve(model) } : env;
+  const child = spawn("llama-server", serverArgs(key, resolved), { cwd: tmpdir(), detached: true, stdio: ["ignore", log.fd, log.fd] });
   return new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("spawn", () => {

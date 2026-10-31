@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { SERVERS, modelConfigs, openLog, serverArgs } from "./servers.ts";
+import { SERVERS, modelConfigs, openLog, serverArgs, startServer } from "./servers.ts";
 
 test("models use the detected per-slot context", () => {
   const [spark, lfm3] = modelConfigs({ spark: 131072, lfm3: 8192 });
@@ -64,4 +64,45 @@ test("logs go to a private directory and are never written through a symlink", (
   symlinkSync(victim, join(dir, "pi-cadre-lfm3.log"));
   if (process.platform === "win32") return t.skip("O_NOFOLLOW is POSIX-only");
   assert.throws(() => openLog(dir, "lfm3"), /ELOOP|EMLINK/);
+});
+
+test("startServer never runs a llama-server program from the current directory (Pi's project)", async () => {
+  // Windows looks a bare command up in the working directory before PATH; PATH "." does the same here, and leaves no
+  // real llama-server to start.
+  const dir = mkdtempSync(join(tmpdir(), "cadre-plant-"));
+  const marker = join(dir, "planted-server-ran");
+  writeFileSync(join(dir, "llama-server"), `#!/bin/sh\ntouch '${marker}'\n`);
+  chmodSync(join(dir, "llama-server"), 0o755);
+  const saved = { cwd: process.cwd(), path: process.env.PATH };
+  process.chdir(dir);
+  process.env.PATH = ".";
+  try {
+    await assert.rejects(startServer("spark", {}, mkdtempSync(join(tmpdir(), "cadre-log-"))));
+  } finally {
+    process.chdir(saved.cwd);
+    process.env.PATH = saved.path;
+  }
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(existsSync(marker), false, "the project's own llama-server ran");
+});
+
+test("startServer runs llama-server outside the project and passes a relative model path as an absolute one", async () => {
+  const bin = mkdtempSync(join(tmpdir(), "cadre-bin-"));
+  const record = join(bin, "record.txt");
+  writeFileSync(join(bin, "llama-server"), `#!/bin/sh\npwd > '${record}'\necho "$@" >> '${record}'\n`);
+  chmodSync(join(bin, "llama-server"), 0o755);
+  const project = mkdtempSync(join(tmpdir(), "cadre-proj-"));
+  const saved = { cwd: process.cwd(), path: process.env.PATH };
+  process.chdir(project);
+  process.env.PATH = bin;
+  try {
+    await startServer("spark", { SPARK_MODEL: "models/spark.gguf" }, mkdtempSync(join(tmpdir(), "cadre-log-")));
+  } finally {
+    process.chdir(saved.cwd);
+    process.env.PATH = saved.path;
+  }
+  for (let i = 0; i < 50 && !existsSync(record); i++) await new Promise((r) => setTimeout(r, 20));
+  const [cwd, args] = readFileSync(record, "utf8").split("\n");
+  assert.notEqual(realpathSync(cwd), realpathSync(project), "not started in the project");
+  assert.match(args, new RegExp(`-m ${realpathSync(project).replace(/[.]/g, "\\\\.")}.*/models/spark\\.gguf|-m /.*/models/spark\\.gguf`));
 });
