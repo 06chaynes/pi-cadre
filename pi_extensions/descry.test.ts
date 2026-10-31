@@ -1,71 +1,104 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { descryCommand, descrySymbols, startIndex } from "./descry.ts";
+import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
 
-const SEARCH_OUTPUT = `[755n/2,409e | 0.1h ago]
+const RESULTS = [
+  { type: "Class", name: "TooManyRedirects", file: "requests/exceptions.py", line: 85 },
+  { type: "Method", name: "resolve_redirects", file: "requests/sessions.py", line: 159 },
+  { type: "File", name: "cookies.py", file: "requests/cookies.py", line: null },
+  { type: "Method", name: "rebuild_proxies", file: "requests/sessions.py", line: 303 },
+];
 
-5 match(es) for 'redirect limit' [hybrid] [exclude_tests, compact]:
-1. [Cla] TooManyRedirects | requests/exceptions.py:85 (20t, 1c)
-2. [Met] resolve_redirects | requests/sessions.py:159 (1230t, 6c)
-3. [Met] should_strip_auth | requests/sessions.py:127 (310t, 6c)
-4. [Fil] cookies.py | requests/cookies.py (4640t, 0c)
-5. [Met] rebuild_proxies | requests/sessions.py:303 (280t, 2c)
-
-Use \`descry context\` with node ID for details.
-`;
-
-/** A fake descry that records its arguments and prints `output` (or fails), and a project dir, indexed or not. */
-function setup(indexed: boolean, output = SEARCH_OUTPUT, exit = 0) {
+/**
+ * A fake descry-mcp: answers initialize, descry_ensure and descry_search (after `delayMs`) over newline-delimited
+ * JSON-RPC on stdio, logging each request to args.log in its working directory.
+ */
+function fakeServer(delayMs = 0, results = RESULTS) {
   const dir = mkdtempSync(join(tmpdir(), "cadre-descry-"));
-  const bin = join(dir, "descry");
-  const log = join(dir, "args.log");
-  writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${log}'\ncat <<'EOF'\n${output}\nEOF\nexit ${exit}\n`);
+  const bin = join(dir, "descry-mcp");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const readline = require("node:readline");
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  fs.appendFileSync("args.log", JSON.stringify({ method: msg.method, params: msg.params }) + "\\n");
+  if (msg.id === undefined) return;
+  if (msg.method === "initialize") return send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "descry", version: "1.0.1" } } });
+  if (msg.params?.name === "descry_ensure") return send({ jsonrpc: "2.0", id: msg.id, result: { content: [], structuredContent: { ok: true } } });
+  setTimeout(() => send({ jsonrpc: "2.0", id: msg.id, result: { content: [], structuredContent: { method: "hybrid", results: ${JSON.stringify(results)} } } }), ${delayMs});
+});
+`,
+  );
   chmodSync(bin, 0o755);
-  const project = join(dir, "project");
-  mkdirSync(project);
-  if (indexed) mkdirSync(join(project, ".descry_cache"));
-  return { bin, log, project, dir };
+  return { bin, dir, log: () => (existsSync(join(dir, "args.log")) ? readFileSync(join(dir, "args.log"), "utf8") : "") };
 }
 
-test("descrySymbols lists the matching symbols as name and file:line, searched with the request's key words", async () => {
-  const { bin, log, project } = setup(true);
-  const symbols = await descrySymbols(bin, project, "Explain where the redirect limit is enforced in this library", 2000);
-  assert.equal(
-    symbols,
-    [
-      "Code symbols matching the request (from descry):",
-      "TooManyRedirects requests/exceptions.py:85",
-      "resolve_redirects requests/sessions.py:159",
-      "should_strip_auth requests/sessions.py:127",
-      "requests/cookies.py",
-      "rebuild_proxies requests/sessions.py:303",
-    ].join("\n"),
-  );
-  assert.match(readFileSync(log, "utf8"), /^search --exclude-tests --limit \d+ redirect limit enforced library$/m);
+test("descrySymbols lists descry's matches as name and file:line, searched with the request's key words", async () => {
+  const { bin, dir, log } = fakeServer();
+  const server = DescryServer.start(bin, dir);
+  try {
+    const symbols = await descrySymbols(server, "Explain where the redirect limit is enforced in this library", 2000);
+    assert.equal(
+      symbols,
+      [
+        "Code symbols matching the request (from descry):",
+        "TooManyRedirects requests/exceptions.py:85",
+        "resolve_redirects requests/sessions.py:159",
+        "requests/cookies.py",
+        "rebuild_proxies requests/sessions.py:303",
+      ].join("\n"),
+    );
+    const search = log().split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.params?.name === "descry_search");
+    assert.deepEqual(search.params.arguments.terms, ["redirect", "limit", "enforced", "library"]);
+    assert.equal(search.params.arguments.exclude_tests, true);
+  } finally {
+    server.close();
+  }
 });
 
-test("descrySymbols stays within its size and gives nothing without an index, on failure, or with no key words", async () => {
-  const { bin, project } = setup(true);
-  assert.equal((await descrySymbols(bin, project, "redirect limit", 140)).split("\n").length, 3);
-  assert.equal(await descrySymbols(bin, setup(false).project, "redirect limit", 2000), "");
-  assert.equal(await descrySymbols(setup(true, "boom", 1).bin, project, "redirect limit", 2000), "");
-  assert.equal(await descrySymbols(bin, project, "what is this", 2000), "");
+test("starting the server asks descry to index or refresh the project", async () => {
+  const { bin, dir, log } = fakeServer();
+  const server = DescryServer.start(bin, dir);
+  try {
+    for (let i = 0; i < 100 && !log().includes("descry_ensure"); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.match(log(), /"method":"initialize"/);
+    assert.match(log(), /"name":"descry_ensure"/);
+  } finally {
+    server.close();
+  }
 });
 
-test("descryCommand finds DESCRY_BIN or descry on PATH", () => {
-  const { bin, dir } = setup(true);
-  assert.equal(descryCommand({ DESCRY_BIN: bin, PATH: "" }), bin);
-  assert.equal(descryCommand({ PATH: `/nonexistent:${dir}` }), bin);
-  assert.equal(descryCommand({ PATH: "/nonexistent" }), undefined);
+test("descrySymbols stays within its size and gives nothing for a slow search, a failed server, or no key words", async () => {
+  const { bin, dir } = fakeServer();
+  const server = DescryServer.start(bin, dir);
+  try {
+    assert.equal((await descrySymbols(server, "redirect limit", 100)).split("\n").length, 2);
+    assert.equal(await descrySymbols(server, "what is this", 2000), "");
+  } finally {
+    server.close();
+  }
+  const slow = fakeServer(500);
+  const slowServer = DescryServer.start(slow.bin, slow.dir);
+  try {
+    assert.equal(await descrySymbols(slowServer, "redirect limit", 2000, 100), "");
+  } finally {
+    slowServer.close();
+  }
+  const missing = DescryServer.start(join(dir, "no-such-descry-mcp"), dir);
+  assert.equal(await descrySymbols(missing, "redirect limit", 2000), "");
+  missing.close();
 });
 
-test("startIndex runs descry ensure in the project, without waiting", async () => {
-  const { bin, log, project } = setup(false, "indexed");
-  startIndex(bin, project);
-  for (let i = 0; i < 50 && !existsSync(log); i++) await new Promise((r) => setTimeout(r, 20));
-  assert.match(readFileSync(log, "utf8"), /^ensure$/m);
+test("descryMcpCommand finds DESCRY_MCP_BIN or descry-mcp on PATH", () => {
+  const { bin, dir } = fakeServer();
+  assert.equal(descryMcpCommand({ DESCRY_MCP_BIN: bin, PATH: "" }), bin);
+  assert.equal(descryMcpCommand({ PATH: `/nonexistent:${dir}` }), bin);
+  assert.equal(descryMcpCommand({ PATH: "/nonexistent" }), undefined);
 });

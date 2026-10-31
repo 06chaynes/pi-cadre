@@ -841,28 +841,42 @@ test("with map, the system message lists the project's files", async () => {
   }
 });
 
-test("with descry, the system message lists descry's symbols for the request, and descry refreshes its index in the background", async () => {
-  const saved = { opts: process.env.CADRE_OPTS, bin: process.env.DESCRY_BIN };
+test("with descry, the session starts descry's MCP server, each prompt lists its symbols, and shutdown stops it", async () => {
+  const saved = { opts: process.env.CADRE_OPTS, bin: process.env.DESCRY_MCP_BIN };
   const dir = mkdtempSync(join(tmpdir(), "cadre-descry-"));
-  const bin = join(dir, "descry");
-  writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${dir}/args.log'\necho "1. [Met] resolve_redirects | requests/sessions.py:159 (1230t, 6c)"\n`);
+  const bin = join(dir, "descry-mcp");
+  const result = { type: "Method", name: "resolve_redirects", file: "requests/sessions.py", line: 159 };
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  require("node:fs").appendFileSync("${dir}/calls.log", (msg.params?.name ?? msg.method) + "\\n");
+  if (msg.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { structuredContent: { results: [${JSON.stringify(result)}] } } }) + "\\n");
+});
+process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.log", "stopped\\n"); process.exit(0); });
+`,
+  );
   chmodSync(bin, 0o755);
   process.env.CADRE_OPTS = "descry";
-  process.env.DESCRY_BIN = bin;
+  process.env.DESCRY_MCP_BIN = bin;
+  const calls = () => readFileSync(join(dir, "calls.log"), "utf8");
   try {
     serveProps({});
-    const { pi, calls } = fakePi();
+    const { pi, calls: hooks } = fakePi();
     await extension(pi as any);
-    const project = join(dir, "project");
-    mkdirSync(join(project, ".descry_cache"), { recursive: true });
-    await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Where is the redirect limit enforced?" }, { ...uiContext(true).ctx, cwd: project });
+    const ctx = { ...uiContext(true).ctx, cwd: dir };
+    await hooks.handlers["session_start"]({ reason: "new" }, ctx);
+    await hooks.handlers["before_agent_start"]({ messageType: "user", prompt: "Where is the redirect limit enforced?" }, ctx);
     const system = { role: "system", content: "Pi system prompt" };
-    await calls.handlers["context_with_system"]({ messages: [system] });
+    await hooks.handlers["context_with_system"]({ messages: [system] });
     assert.match(system.content, /Code symbols matching the request \(from descry\):\nresolve_redirects requests\/sessions\.py:159/);
-    for (let i = 0; i < 50 && !/ensure/.test(readFileSync(join(dir, "args.log"), "utf8")); i++) await new Promise((r) => setTimeout(r, 20));
-    assert.match(readFileSync(join(dir, "args.log"), "utf8"), /^ensure$/m, "the index is refreshed in the background");
+    assert.match(calls(), /^initialize\nnotifications\/initialized\ndescry_ensure\ndescry_search$/m);
+    await hooks.handlers["session_shutdown"]({}, ctx);
+    for (let i = 0; i < 50 && !calls().includes("stopped"); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.match(calls(), /stopped/);
   } finally {
-    for (const [key, value] of [["CADRE_OPTS", saved.opts], ["DESCRY_BIN", saved.bin]] as const) {
+    for (const [key, value] of [["CADRE_OPTS", saved.opts], ["DESCRY_MCP_BIN", saved.bin]] as const) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }

@@ -33,7 +33,7 @@ import { guardReason } from "./guard.ts";
 import { researchQuestion, routeRequest } from "./router.ts";
 import { recall, taskQueries } from "./memory.ts";
 import { projectMap } from "./projectmap.ts";
-import { descryCommand, descrySymbols, startIndex } from "./descry.ts";
+import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
@@ -265,6 +265,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     pruneOriginals(resultsDir(), Date.now());
+    if (OPTS.has("descry")) startDescry(ctx.cwd);
     if (event.reason !== "startup" || !ctx.hasUI) return;
     contexts = await probeContexts();
     register();
@@ -431,6 +432,18 @@ export default async function (pi: ExtensionAPI) {
   let map = "";
   // descry's symbols for the current prompt, or "" when off, not installed, or nothing matched.
   let symbols = "";
+  // The session's descry MCP server and the directory it serves, when the descry option is on and descry-mcp is installed.
+  let descry: { server: DescryServer; cwd: string } | undefined;
+  const startDescry = (cwd: string) => {
+    if (descry?.cwd === cwd) return;
+    descry?.server.close();
+    const bin = descryMcpCommand();
+    descry = bin ? { server: DescryServer.start(bin, cwd), cwd } : undefined;
+  };
+  pi.on("session_shutdown", async () => {
+    descry?.server.close();
+    descry = undefined;
+  });
   // The end-of-run source check runs once per prompt.
   let sourcesChecked = false;
   // Whether this prompt's run was already asked to look its answer up.
@@ -699,10 +712,7 @@ export default async function (pi: ExtensionAPI) {
     if (event.messageType !== "user" || !event.prompt) return undefined;
     lastPrompt = event.prompt;
     map = OPTS.has("map") ? projectMap(ctx.cwd, event.prompt, MAP_MAX_CHARS) : "";
-    const descry = OPTS.has("descry") ? descryCommand() : undefined;
-    symbols = descry ? await descrySymbols(descry, ctx.cwd, event.prompt, SYMBOLS_MAX_CHARS) : "";
-    // Indexing (first time) or refreshing after edits happens in the background, for this prompt's later turns and the next prompt.
-    if (descry) startIndex(descry, ctx.cwd);
+    symbols = descry ? await descrySymbols(descry.server, event.prompt, SYMBOLS_MAX_CHARS) : "";
     if (thinkingMode === "auto") {
       const reasoning = REASONING_PROMPT.test(event.prompt);
       // EXPERIMENT: "think" makes low the default and high the level for reasoning prompts.
