@@ -1,6 +1,6 @@
 {
   "name": "pi-cadre",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Pi provider, per-task thinking, and model setup for small local models served by llama.cpp",
   "license": "MIT",
   "type": "module",
