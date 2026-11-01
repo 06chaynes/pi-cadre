@@ -36,6 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   results at the clearing budget, against 153 with line matching; in replays of the iPhone write step the wrong year
   fell from 8 to 3 of 10 (thinking off) and 5 to 2 (low); live research scores were level (40 and 41 of 42). Without it, line
   matching is used.
+- Optional descry integration: when `descry-mcp` is installed, each session starts it and the system message lists the
+  symbols matching the prompt (name and file:line), found in code, with no tools added for the model. On a large Rust
+  repository (12 navigation questions, 3 rounds): 36/36 with descry (either embedding model) against 33/36 without,
+  with 121-143 tool calls against 260.
 - `launchers/searxng.sh` / `.bat`: set up, check and tear down a local SearXNG for web search without an API key.
 
 ### Changed

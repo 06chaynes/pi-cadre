@@ -275,7 +275,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     pruneOriginals(resultsDir(), Date.now());
-    if (OPTS.has("descry")) startDescry(ctx.cwd);
+    startDescry(ctx.cwd);
     if (event.reason !== "startup" || !ctx.hasUI) return;
     contexts = await probeContexts();
     register();
@@ -428,15 +428,13 @@ export default async function (pi: ExtensionAPI) {
     return content === event.content ? undefined : { content };
   });
 
-  // EXPERIMENT ONLY (removed before release): CADRE_OPTS turns on options still being compared.
-  //   descry    with descry installed, the system message lists its symbols for the request (see descry.ts)
-  const OPTS = new Set((process.env.CADRE_OPTS ?? "").split(",").filter(Boolean));
   let continued = false;
   // The project file map for the current prompt (built at its start), or "" when off.
   let map = "";
-  // descry's symbols for the current prompt, or "" when off, not installed, or nothing matched.
+  // descry's symbols for the current prompt, or "" when descry is not installed or nothing matched.
   let symbols = "";
-  // The session's descry MCP server and the directory it serves, when the descry option is on and descry-mcp is installed.
+  // The session's descry MCP server and the directory it serves, when descry-mcp is installed. On a large Rust
+  // repository, symbols for the prompt took navigation questions from 33 to 36 of 36 with about half the tool calls.
   let descry: { server: DescryServer; cwd: string } | undefined;
   const startDescry = (cwd: string) => {
     if (descry?.cwd === cwd) return;

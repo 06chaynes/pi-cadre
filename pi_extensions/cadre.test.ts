@@ -956,8 +956,8 @@ test("the system message lists the project's files", async () => {
   assert.match(system.content, /pi_extensions\/router\.ts/);
 });
 
-test("with descry, the session starts descry's MCP server, each prompt lists its symbols, and shutdown stops it", async () => {
-  const saved = { opts: process.env.CADRE_OPTS, bin: process.env.DESCRY_MCP_BIN };
+test("with descry installed, the session starts descry's MCP server with no setting, each prompt lists its symbols, and shutdown stops it", async () => {
+  const saved = process.env.DESCRY_MCP_BIN;
   const dir = mkdtempSync(join(tmpdir(), "cadre-descry-"));
   const bin = join(dir, "descry-mcp");
   const result = { type: "Method", name: "resolve_redirects", file: "requests/sessions.py", line: 159 };
@@ -973,7 +973,6 @@ process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.lo
 `,
   );
   chmodSync(bin, 0o755);
-  process.env.CADRE_OPTS = "descry";
   process.env.DESCRY_MCP_BIN = bin;
   const calls = () => readFileSync(join(dir, "calls.log"), "utf8");
   try {
@@ -991,10 +990,8 @@ process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.lo
     for (let i = 0; i < 50 && !calls().includes("stopped"); i++) await new Promise((r) => setTimeout(r, 20));
     assert.match(calls(), /stopped/);
   } finally {
-    for (const [key, value] of [["CADRE_OPTS", saved.opts], ["DESCRY_MCP_BIN", saved.bin]] as const) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    if (saved === undefined) delete process.env.DESCRY_MCP_BIN;
+    else process.env.DESCRY_MCP_BIN = saved;
   }
 });
 
