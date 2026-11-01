@@ -46,6 +46,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - An edit that starts on LFM3 continues on Spark (local-code tasks 30/30 vs 28/30 on LFM3 alone).
 - The reply limit is set from the measured request size (stale limits of 1 or 17 tokens previously cut replies).
 - The web search result-count cap is removed; results are shortened by their hits instead.
+- Kept tool results use half of what Spark's window leaves, without a fixed 16,384-token cap. The cap never bound at
+  the default 32k slot but held a 64k slot at 16k of ~28k: roles write-ups on a large Rust repository at 64k wrote the
+  document in 2 of 4 runs with it and 3 of 4 without (rubric coverage 3 and 5 vs 6, 4 and 7 of 10). At 32k neither
+  finished; the README says large-repo write-ups need a larger Spark slot.
+- Cleared local reads and command output are recalled while current (a read until its file changes, other output until
+  any file does), and a task without a list gets one recall query per clause. In replays this restored the passages of
+  re-read files but did not by itself stop the re-reading; the window size did.
 
 ### Fixed
 
@@ -53,6 +60,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Six parallel searches overflowed the context (39,699 tokens): parallel calls now share the room for new results.
 - Thinking could use a whole reply and leave no answer; a reply cut off at the limit now continues.
 - Product names in camel case (iPhone, eBay, macOS) routed research questions to LFM3 as local code.
+- Source-check false alarms found in validation runs, each fixed with a test and checked offline over all saved sessions
+  (flags removed, none added): an HTTP status reported from a failed call, read with that call's URL; quoted labels of
+  three words or fewer; a run-together power copied from a source (2136,279,841); line numbers into files, now checked
+  against the numbered lines of the reads (a wrong one is still named); a quoted doc comment spanning lines; a URL that
+  a web call fetched, or that a fetched page links to relatively.
 - Numbers the model guessed in a query no longer decide which lines of a result are kept (the iPhone case kept four
   1978 passages and dropped the 2007 one).
 - Security: recall never arrives as a user turn; syntax checkers run isolated (`python -I`, neutral directory); git and
