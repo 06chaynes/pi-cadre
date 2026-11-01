@@ -100,9 +100,6 @@ const STEPS_HEADING = "Steps already taken for it (condensed by cadre without a 
 // Size of the digest of earlier requests, and how much of an older answer it keeps once that size is reached.
 const DIGEST_MAX_CHARS = 7000;
 const DIGEST_SHORT_ANSWER_CHARS = 200;
-// Most tokens of read tool results kept in full during a task; more would slow every request with no gain, as with
-// RESULT_MAX_TOKENS.
-const KEPT_RESULTS_MAX_TOKENS = 16384;
 // Chat template tokens added around each message, which /tokenize of the joined text does not include.
 const TEMPLATE_TOKENS_PER_MESSAGE = 8;
 const MAX_SHORTEN_ROUNDS = 4;
@@ -600,12 +597,13 @@ export default async function (pi: ExtensionAPI) {
     return edits;
   };
 
-  // During a task, results the model has read stay in full while they fit resultRoom (at most
-  // KEPT_RESULTS_MAX_TOKENS); older ones are cleared, so a long task does not fill the window with results it has
-  // finished with.
+  // During a task, results the model has read stay in full while they fit resultRoom (half of what Spark's window
+  // leaves after the reply and system prompt); older ones are cleared, so a long task does not fill the window with
+  // results it has finished with. A fixed 16,384-token cap held a 64k slot's kept results at 16k of ~28k, and large-repo
+  // write-ups re-read cleared files until they timed out.
   pi.on("turn_end", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
-    const keep = Math.min(KEPT_RESULTS_MAX_TOKENS, resultRoom());
+    const keep = resultRoom();
     const edits = await clearResults(event.context.contextEntries, keep, new Set(event.toolResultEntryIds), "to make room");
     return edits.length ? { entries: edits } : undefined;
   });

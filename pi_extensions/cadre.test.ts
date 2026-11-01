@@ -425,6 +425,17 @@ test("during a task, older tool results are cleared once the kept results pass t
   assert.equal(seen[8].length, 30_007);
 });
 
+test("with a larger Spark window, kept results use half of what it leaves, so reads are not cleared early", async () => {
+  // A 16,384-token cap held kept results at 16k of a 64k slot's ~28k: write-ups on a large repository re-read files
+  // and timed out (docs 2 of 4); with kept results at half the free window, 3 of 4 wrote the document.
+  serveProps({ 8080: 65536, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  // (65,536 - 8,192 reply - 4,096 system) / 2 = 26,624 tokens; four seen results of about 6,000 tokens each fit.
+  const task = taskInProgress(10_800, 10_800, 10_800, 10_800, 100);
+  assert.equal(await calls.handlers["turn_end"](turnEnd(task), sessionContext([])), undefined);
+});
+
 test("during a task, results within the budget, other providers, and results already cleared are left alone", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
