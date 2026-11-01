@@ -73,6 +73,10 @@ Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 
 Command-line flags override the config; run `start_llama_server.sh --help` to list them. By default `spark` and `lfm3` download the Q4_K_M quants from Hugging Face. To use local files or other quants, set `SPARK_MODEL` and `LFM3_MODEL` to a `.gguf` path or Hugging Face ID.
 
+Long write-ups that read many files of a large repository need more than a 32k slot on Spark: at 32k the model
+re-read cleared files until it ran out of time, while with `MODEL=spark` and `PARALLEL_SLOTS=2` (2 slots of 64k) it
+wrote the document in 3 of 4 runs. Fewer slots means fewer requests served at once.
+
 On machines with more than one GPU, llama.cpp splits layers across all of them. Add `-- --device <name>` to pin a server to one device; `llama-server --list-devices` lists the names.
 
 With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
