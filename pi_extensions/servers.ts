@@ -5,7 +5,8 @@
 
 import { spawn } from "node:child_process";
 import { chmodSync, constants, mkdirSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const HOST = "127.0.0.1";
 const THINKING_ENABLED = { $var: "thinking.enabled" };
@@ -34,6 +35,10 @@ export const SERVERS = {
   },
 } as const;
 export type ServerKey = keyof typeof SERVERS;
+
+// The optional reranker cadre ranks cleared results with when it is running (see rerank.ts), on its own llama-server
+// started by the launchers with MODEL=reranker (--embedding --pooling rank --reranking).
+export const RERANKER = { id: "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", port: 8082 } as const;
 export const SERVER_KEYS = Object.keys(SERVERS) as ServerKey[];
 export type Contexts = Partial<Record<ServerKey, number>>;
 
@@ -110,7 +115,12 @@ export function openLog(dir: string, key: ServerKey): { path: string; fd: number
  */
 export function startServer(key: ServerKey, env: Record<string, string | undefined>, logDir: string): Promise<string> {
   const log = openLog(logDir, key);
-  const child = spawn("llama-server", serverArgs(key, env), { detached: true, stdio: ["ignore", log.fd, log.fd] });
+  // llama-server runs from a neutral directory: Windows looks a bare command up in the working directory (Pi's project)
+  // before PATH, so a llama-server.exe committed to a project would otherwise run. A relative model path is resolved
+  // against that project first.
+  const model = env[SERVERS[key].modelEnv];
+  const resolved = model?.endsWith(".gguf") && !isAbsolute(model) ? { ...env, [SERVERS[key].modelEnv]: resolve(model) } : env;
+  const child = spawn("llama-server", serverArgs(key, resolved), { cwd: tmpdir(), detached: true, stdio: ["ignore", log.fd, log.fd] });
   return new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("spawn", () => {

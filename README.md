@@ -68,21 +68,88 @@ Run `python3 setup_wizard.py --help` for the unattended and dry-run flags.
 | `dual` | Spark on 8080 (4 slots x 32k) and LFM3 on 8081 (4 slots x 16k) | `cadre`, routed per prompt |
 | `spark` | Spark on 8080 | Spark |
 | `lfm3` | LFM3 on 8081 | LFM3 |
+| `reranker` | Qwen3-Reranker-0.6B on 8082 (optional, run beside the others) | not a chat model |
 | HF repo ID or `.gguf` path | that model on `PORT` (default 8080) | Spark entry on 8080 |
 
 Command-line flags override the config; run `start_llama_server.sh --help` to list them. By default `spark` and `lfm3` download the Q4_K_M quants from Hugging Face. To use local files or other quants, set `SPARK_MODEL` and `LFM3_MODEL` to a `.gguf` path or Hugging Face ID.
+
+Long write-ups that read many files of a large repository need more than a 32k slot on Spark: at 32k the model
+re-read cleared files until it ran out of time, while with `MODEL=spark` and `PARALLEL_SLOTS=2` (2 slots of 64k) it
+wrote the document in 3 of 4 runs. Fewer slots means fewer requests served at once.
 
 On machines with more than one GPU, llama.cpp splits layers across all of them. Add `-- --device <name>` to pin a server to one device; `llama-server --list-devices` lists the names.
 
 With Ollama, start the server with `launchers/start_ollama.sh` (or `.bat`) and run `pi`.
 
-When a read or bash result is cut off, the extension appends the lines outside the shown part that contain words from your request, with line numbers, so the model gets them even if it does not page through the rest. Any tool result too large for the context window (more than 40% of the largest slot), such as a long web search, is shortened to its start plus the lines that contain words from your request.
+### Local web search (optional)
+
+Pi's web tools come from separate packages. To search without an API key or quota, run a local
+[SearXNG](https://github.com/searxng/searxng) and point [`pi-web-access`](https://www.npmjs.com/package/pi-web-access)
+at it:
+
+```bash
+./launchers/searxng.sh setup      # Windows: launchers\searxng.bat setup; needs Docker
+./launchers/searxng.sh status
+./launchers/searxng.sh teardown   # add --purge to delete the config too
+```
+
+`setup` starts a pinned SearXNG image bound to `127.0.0.1` only and prints the `web-search.json` that keeps every
+search on it. SearXNG sends queries to public engines from your IP address; some (Brave, DuckDuckGo) rate-limit
+frequent automated queries, so the config enables several others. The extension's handling of web results does not
+depend on which search package you use.
+
+### How the extension keeps long tasks working
+
+Small local models have small context windows (Spark gets 32k tokens per slot). The extension manages context in
+code, so none of this depends on the model remembering to do it:
+
+- **Real sizes.** Each server's per-slot window is read from llama-server, and each request's reply limit is set from
+  the request's actual token count.
+- **Tool results fit.** A result larger than its share of the window is shortened. Search results keep each hit's
+  title and URL and the passages that best match the search and your request; other results keep their opening and
+  the matching lines, with a note on how to see the rest. Parallel calls share the room.
+- **Old results leave; useful passages come back.** During a task, results the model has already read are replaced
+  by a short extract once they pass a budget. Passages of cleared web results that match the task are restored inside
+  the result they came from (one query per listed item, ranked with BM25). The full text of shortened web results is
+  kept in `~/.local/state/pi-cadre/results/` for a week so these passages can come from the cut part too. With the
+  optional reranker running (`start_llama_server.sh -m reranker`), a cleared result keeps the passages it scores
+  highest for the request item the call served; across 254 results that held an answer, the answer stayed in 238 this
+  way and in 153 with line matching. Without it, line matching is used.
+- **Searches carry what is known, not guesses.** A number in a search query that neither your request nor an earlier
+  result contains is removed before the search runs, and such numbers never decide which parts of a result are kept.
+  With a guessed year in the query, a search for the first iPhone's release year returned pages about a date bug and
+  the answer was wrong in 8 of 10 samples; without it, in 0 of 10.
+- **Compaction without a model.** When compaction is still needed, earlier questions and the current request's earlier
+  steps are condensed by code: the request verbatim, then each step's call and outcome.
+- **Project files and the date.** The system message lists the project's files (from git, bounded in size) and
+  today's date, which Pi's own prompt does not include.
+- **Code symbols (optional).** When [descry](https://pypi.org/project/descry-codegraph/) is installed (`descry-mcp` on
+  `PATH`, or `DESCRY_MCP_BIN`), each session starts its MCP server in the working directory and the system message
+  lists the symbols matching the prompt (name and file:line). On a large Rust repository this took "which function, in
+  which file" questions from 33 to 36 of 36, with about half the tool calls. The first index of a large repository
+  takes a while; see descry's documentation for its settings. Only absolute `PATH` entries are searched, and on Windows
+  the integration is not yet supported.
+- **Broken edits are reported.** After an edit or write, the file is parsed (Python, JavaScript, TypeScript, Rust, or
+  Go, when the parser is installed) and a syntax error is reported in the same tool result.
+- **Thinking.** Thinking is low for every prompt. On a 12-item research task, off, low and high scored 38, 40 and 27
+  of 42 over three runs each (high over-checked and failed to finish one run, off over-explored and failed to finish
+  one write-up); on coding all three passed. Every request with thinking on gets a thinking budget well below its
+  reply limit, so reasoning cannot use up a reply.
+- **Answers are checked against their sources.** When a run ends, numbers, quotes and URLs in the answer, or in a
+  prose file written in the run, are matched against what the tools returned, in a passage about the same item. A
+  value with no source, or found only through a search that already guessed it, or a URL that only failed to load, gets
+  one step that names it and quotes the closest source passage. A question about the world answered without any source
+  gets one step asking for a search with the installed tools.
+- **Recovery.** A reply cut off before any answer or tool call continues once. Path-guard blocks say what to do
+  instead and list matching project files.
+- **Routing.** LFM3 answers questions about local code; edits start on LFM3 and finish on Spark; everything else runs
+  on Spark.
 
 Pi commands added by the extension:
 
 - `/cadre-status`: health, model file, and per-slot context of both servers, and whether `cadre` can route to LFM3.
 - `/cadre-start`: starts the servers that are not running.
-- `/cadre-thinking auto|off|minimal|low|medium|high`: in `auto`, prompts mentioning planning, architecture, diagnosis, debugging, investigation, or review run with medium thinking, and all others run with thinking off.
+- `/cadre-thinking auto|off|minimal|low|medium|high`: `auto` (the default) uses low thinking for every prompt; another level applies to every prompt until changed.
 - `/cadre-guard on|off`: path guard, on by default. Writes and edits must stay inside the working directory. Reads, searches, and bash commands may also use system directories (`/usr`, `/etc`, `/opt`, and similar) but nothing else outside the working directory, including its parent, your home directory, and `/tmp`. Bash commands are checked by the paths written in them, so it catches mistakes rather than acting as a sandbox.
 
 ## Python client
@@ -131,7 +198,7 @@ Each task description in B and C states the fix. C passes when that exact text a
 | `setup_wizard.py`, `install.sh`, `install.bat` | Installer |
 | `cadre_config.env` | Server settings read by the launchers |
 | `launchers/` | Server and Pi launchers |
-| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts` |
+| `pi_extensions/` | Pi extension: `cadre.ts` (entry), `servers.ts`, `router.ts`, `guard.ts`, and the context modules (`tokens.ts`, `text.ts`, `unseen.ts`, `memory.ts`, `originals.ts`, `projectmap.ts`, `syntax.ts`, `claims.ts`) |
 | `llama_cpp_client.py` | llama-server client and routing policies |
 | `repo_indexer.py` | AST symbol scan and function slicing |
 | `benchmark_tasks.py` | Benchmark task data |

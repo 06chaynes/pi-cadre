@@ -1,26 +1,49 @@
 /**
- * Model routing for the "cadre" virtual model. LFM3 answers questions and makes single-spot edits; Spark does
- * everything else. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, but lost track
+ * Model routing for the "cadre" virtual model. LFM3 answers questions about local code and takes the first step of a
+ * single-spot edit, which Spark finishes; Spark does everything else, including questions that may need web research. In Pi sessions LFM3 matched Spark on reading, small edits, and a contained bug fix, but lost track
  * of the working directory and damaged files on a multi-step feature, so anything multi-step goes to Spark.
  */
 
 const MAX_LFM3_PROMPT = 300;
-// English prose runs about 4 characters per token and code or JSON fewer; 3 overestimates both.
-export const CHARS_PER_TOKEN = 3;
 const QUESTION_START = /^\s*(what|where|which|who|when|why|how|does|do|is|are|can|could|explain|describe|show|list|find|summari[sz]e)\b/i;
 const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix|change|update|remove|delete|plan|design|review|diagnose|debug|investigate|tests?)\b/i;
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
 const MULTI_STEP = /\b(tests?|then|every|all|each|across|refactor|implement)\b/i;
+// A file name in any language (a name of two or more characters and an extension, not a web domain), a backticked or
+// snake_case or camelCase identifier, or "this/the repo|code|function|...".
+const WEB_DOMAINS = "com|org|net|edu|gov|io|co|uk|de|jp|fr|info|dev|ai|app";
+const LOCAL_REFERENCE = new RegExp(
+  [
+    `\\b[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
+    "`[^`]+`",
+    "\\b[a-z0-9]+_[a-z0-9_]+\\b",
+    // camelCase: two or more lowercase letters, then a capital and a lowercase letter, so identifiers (restockReport,
+    // isEnabled) count and product names (iPhone, eBay, macOS) do not.
+    "\\b[a-z]{2,}[A-Z][a-z]\\w*\\b",
+    "\\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\\b",
+  ].join("|"),
+);
+
+// Asking outright for research, whatever else the prompt names (a research.md to write, for instance).
+const RESEARCH_REQUEST = /\b(research|look up|search (the )?(web|online|internet))\b/i;
 
 export type ModelChoice = "spark" | "lfm3";
+
+const isQuestion = (text: string) => QUESTION_START.test(text) || text.endsWith("?");
+
+/** Whether a prompt asks about the world rather than local code: a question with no local reference, or a research request. */
+export function researchQuestion(prompt: string): boolean {
+  const text = prompt.trim();
+  return RESEARCH_REQUEST.test(text) || (isQuestion(text) && !CHANGE.test(text) && !LOCAL_REFERENCE.test(text));
+}
 
 /** Picks the model for a user prompt. */
 export function chooseModel(prompt: string): ModelChoice {
   const text = prompt.trim();
   if (text.length > MAX_LFM3_PROMPT) return "spark";
   if (SMALL_EDIT.test(text) && !MULTI_STEP.test(text)) return "lfm3";
-  const question = QUESTION_START.test(text) || text.endsWith("?");
-  return question && !CHANGE.test(text) ? "lfm3" : "spark";
+  // Questions without a local reference may need research; LFM3 wrote poor search queries for those.
+  return isQuestion(text) && !CHANGE.test(text) && LOCAL_REFERENCE.test(text) ? "lfm3" : "spark";
 }
 
 /** Text of the last user message, with text blocks joined by newlines. */
@@ -34,41 +57,19 @@ export function promptText(messages: readonly any[]): string {
     .join("\n");
 }
 
-/** Upper estimate of the tokens in `messages`: text blocks by length, other blocks (tool calls, thinking) as JSON. */
-export function estimateTokens(messages: readonly any[]): number {
-  let chars = 0;
-  for (const message of messages) {
-    const content = message?.content;
-    if (typeof content === "string") {
-      chars += content.length;
-      continue;
-    }
-    for (const block of content ?? []) {
-      chars += typeof block?.text === "string" ? block.text.length : JSON.stringify(block).length;
-    }
-  }
-  return Math.ceil(chars / CHARS_PER_TOKEN);
-}
-
 interface RouteModels<M> {
   spark: M;
-  /** Undefined when LFM3 is offline or its slots are too small for Pi. */
+  /** Undefined when LFM3 is offline, its slots are too small for Pi, or this request's conversation does not fit. */
   lfm3?: M;
 }
 
 /**
- * Physical model and thinking level for one request. A turn stays on the model that started it unless the conversation
- * outgrows LFM3 (for example after a large tool result), a failed request retries on Spark, and requests outside the
- * agent loop (compaction summaries) go to Spark.
+ * Physical model and thinking level for one request. A question stays on the model that started it unless LFM3 is not
+ * passed (the caller leaves it out when the conversation outgrows it); a change continues on Spark; a failed request
+ * retries on Spark; and requests outside the agent loop (compaction summaries) go to Spark.
  */
-export function routeRequest<M extends { id: string; contextWindow: number; maxTokens: number }>(
-  request: any,
-  models: RouteModels<M>,
-) {
-  const { spark } = models;
-  // LFM3 takes a request only if the conversation, plus room for its reply, fits its context window.
-  const fits = models.lfm3 !== undefined && estimateTokens(request.messages ?? []) <= models.lfm3.contextWindow - models.lfm3.maxTokens;
-  const lfm3 = fits ? models.lfm3 : undefined;
+export function routeRequest<M extends { id: string }>(request: any, models: RouteModels<M>) {
+  const { spark, lfm3 } = models;
   const isLfm3 = (model?: { id: string }) => lfm3 !== undefined && model?.id === lfm3.id;
   switch (request.reason) {
     case "retry": {
@@ -77,8 +78,11 @@ export function routeRequest<M extends { id: string; contextWindow: number; maxT
     }
     case "continuation": {
       const previous = request.previous;
+      // A change continues on Spark: LFM3 is quick to read and locate, but placed edits wrong where Spark did not.
+      const text = promptText(request.messages);
+      const change = SMALL_EDIT.test(text) || CHANGE.test(text);
       return {
-        model: isLfm3(previous?.model) ? (lfm3 as M) : spark,
+        model: isLfm3(previous?.model) && !change ? (lfm3 as M) : spark,
         thinkingLevel: previous?.thinkingLevel ?? request.thinkingLevel,
       };
     }

@@ -13,26 +13,18 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import { passages } from "./memory.ts";
+import { bm25, keywords } from "./text.ts";
+
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_MATCHES = 20;
 const MAX_LINE_CHARS = 300;
-const STOPWORDS = new Set(
-  ("about according all also and answer any are but can could did does each explain file for from get give had has " +
-    "have how into its just like not one only our out please read sentence should show some tell than that the " +
-    "their them then there they this use using was were what when where which who why will with would you your")
-    .split(" "),
-);
-
-/** Distinctive words of a request, in order: lowercase letters and digits, three or more characters, no stopwords. */
-export function keywords(prompt: string): string[] {
-  const words = prompt.toLowerCase().match(/[a-z0-9]{3,}/g) ?? [];
-  return [...new Set(words)].filter((word) => !STOPWORDS.has(word));
-}
-
 /** Lines of a text file, or undefined when it is missing, unreadable, or larger than `maxBytes`. */
 export function readLinesCapped(path: string, maxBytes: number): string[] | undefined {
   try {
-    if (statSync(path).size > maxBytes) return undefined;
+    const st = statSync(path);
+    // A device (such as /dev/zero) reports no size and never ends.
+    if (!st.isFile() || st.size > maxBytes) return undefined;
     return readFileSync(path, "utf8").split("\n");
   } catch {
     return undefined;
@@ -76,9 +68,10 @@ export function unseenNote(
 
 /**
  * `text` cut to at most `maxChars`: the first lines up to half the limit, then the other lines that contain words from
- * `prompt`, with line numbers, and a note saying what was left out. Text within the limit is returned unchanged.
+ * `prompt`, with line numbers, and a note saying what was left out and `more` (how to see the rest). Text within the
+ * limit is returned unchanged.
  */
-export function shortenText(text: string, prompt: string, maxChars: number): string {
+export function shortenText(text: string, prompt: string, maxChars: number, more = ""): string {
   if (text.length <= maxChars) return text;
   const lines = text.split("\n");
   let head = 0;
@@ -92,7 +85,7 @@ export function shortenText(text: string, prompt: string, maxChars: number): str
     head = 1;
   }
   const words = keywords(prompt);
-  const note = `[Result shortened from ${text.length} to fit the context window. Lines 1-${head} are above; below are the other lines that contain words from the request (${words.join(", ") || "none"}).]`;
+  const note = `[Result shortened from ${text.length} to fit the context window. Lines 1-${head} are above; below are the other lines that contain words from the request (${words.join(", ") || "none"}).${more ? ` ${more}` : ""}]`;
   let budget = maxChars - used - note.length - 2;
   const kept: { i: number; text: string }[] = [];
   for (const match of matchingLines(lines, words, (i) => i >= head, Number.MAX_SAFE_INTEGER)) {
@@ -124,3 +117,85 @@ function matchingLines(lines: string[], words: string[], include: (i: number) =>
 
 const numbered = (matches: { i: number; text: string }[]) =>
   matches.map((m) => `${m.i + 1}: ${m.text.slice(0, MAX_LINE_CHARS)}`).join("\n");
+
+// A URL in a result; a block of text that holds one starts a hit, and blocks after it without one belong to it.
+const URL_IN_TEXT = /https?:\/\/\S+/;
+const TITLE_CHARS = 150;
+const SEARCH_PASSAGE_CHARS = 500;
+
+/**
+ * A result made of hits (blocks of text that each carry a URL, in any tool's format) cut to at most `maxChars`: a note,
+ * then every hit's heading lines (its first line and its URL lines), each followed by its passages that best match
+ * `query` (BM25), the best passage of each hit first and then the best of the rest. When the headings alone do not
+ * fit, hits are kept in order of their best passage instead (see below). A block that only repeats earlier hits' URLs
+ * (a trailing source list) is not a hit. Undefined when the text holds fewer than two hits (shortenText handles it).
+ */
+export function shortenHits(text: string, query: string, maxChars: number): string | undefined {
+  const hits: { first: string; sources: string; header: string; body: string }[] = [];
+  const preamble: string[] = [];
+  const seen = new Set<string>();
+  for (const block of text.split(/\n\s*\n/)) {
+    if (URL_IN_TEXT.test(block)) {
+      // A block whose URLs all belong to earlier hits repeats them (a trailing list of sources) and is not a hit.
+      const urls = block.match(new RegExp(URL_IN_TEXT.source, "g")) ?? [];
+      if (urls.every((url) => seen.has(url))) continue;
+      for (const url of urls) seen.add(url);
+      const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+      const sources = lines.filter((line) => URL_IN_TEXT.test(line)).map((line) => line.slice(0, TITLE_CHARS + 100));
+      const first = URL_IN_TEXT.test(lines[0]) ? "" : lines[0].slice(0, TITLE_CHARS + 100);
+      hits.push({ first, sources: sources.join("\n"), header: [first, sources.join("\n")].filter(Boolean).join("\n"), body: block });
+    } else if (hits.length) {
+      hits[hits.length - 1].body += "\n\n" + block;
+    } else {
+      preamble.push(block);
+    }
+  }
+  if (hits.length < 2) return undefined;
+  const note = `[Result shortened from ${text.length.toLocaleString("en-US")} characters: every hit's title and URL, then the passages that best match the request. Fetch a URL for its full text.]`;
+  const lead = preamble.join("\n").split("\n")[0]?.slice(0, TITLE_CHARS) ?? "";
+  let room = maxChars - note.length - lead.length - 1 - hits.reduce((sum, h) => sum + h.header.length + 2, 0);
+  const all = hits.flatMap((h, hit) => passages({ source: "", text: h.body }, SEARCH_PASSAGE_CHARS).map((p) => ({ hit, text: p.text })));
+  const scores = all.length ? bm25(all.map((p) => p.text)).score(query) : [];
+  const order = all.map((_, i) => i).filter((i) => scores[i].matched > 0).sort((a, b) => scores[b].score - scores[a].score);
+  const out = [note, ...(lead ? [lead] : [])];
+  if (room < 0) {
+    // The hits do not all fit: hits in order of their best passage each keep their source line and that passage while
+    // room lasts, then other hits their source line, so a short budget keeps content that answers the request rather
+    // than a list of titles.
+    room = maxChars - note.length - lead.length - 1;
+    const best = hits.map((_, hit) => order.find((i) => all[i].hit === hit));
+    const score = (hit: number) => (best[hit] === undefined ? -1 : scores[best[hit]!].score);
+    const rank = hits.map((_, hit) => hit).sort((a, b) => score(b) - score(a) || a - b);
+    const shown = new Map<number, string[]>();
+    for (const hit of rank) {
+      const p = best[hit];
+      if (p === undefined) continue;
+      const line = hits[hit].sources.split("\n")[0];
+      const lines = all[p].text.includes(line) ? [all[p].text] : [line, all[p].text];
+      const cost = lines.reduce((sum, l) => sum + l.length + 1, 0);
+      if (cost <= room) [shown.set(hit, lines), (room -= cost)];
+    }
+    for (const hit of rank) {
+      const line = hits[hit].sources.split("\n")[0];
+      if (!shown.has(hit) && line.length + 1 <= room) [shown.set(hit, [line]), (room -= line.length + 1)];
+    }
+    hits.forEach((_, hit) => shown.has(hit) && out.push(...shown.get(hit)!));
+    return out.join("\n").slice(0, maxChars);
+  }
+  const chosen = new Set<number>();
+  const take = (i: number) => {
+    if (room < all[i].text.length + 1) return;
+    chosen.add(i);
+    room -= all[i].text.length + 1;
+  };
+  for (let hit = 0; hit < hits.length; hit++) {
+    const best = order.find((i) => all[i].hit === hit);
+    if (best !== undefined) take(best);
+  }
+  for (const i of order) if (!chosen.has(i)) take(i);
+  hits.forEach((h, hit) => {
+    out.push(h.header);
+    all.forEach((p, i) => chosen.has(i) && p.hit === hit && !h.header.includes(p.text) && out.push(p.text));
+  });
+  return out.join("\n").slice(0, maxChars);
+}

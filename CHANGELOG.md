@@ -6,6 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0]
+
+### Added
+
+- Long tasks keep their context in code, never by asking the model:
+  - Tool results the model has read stay in full while they fit; older ones are cleared to their opening and the lines
+    matching their call and the request (previously a cleared result was dropped whole).
+  - When the conversation still fits, threshold compaction is cancelled; when it does not, earlier steps of the current
+    request are condensed in code (the request verbatim, each call and its outcome) instead of by a model summary.
+  - Passages of cleared web results that match the task come back inside the result they came from (BM25, one query
+    per listed item), from the full original kept on disk per session (`~/.local/state/pi-cadre/results`, 7 days).
+  - Earlier steps' reasoning leaves each request (Spark's template renders all of it).
+- End-of-run source check: one corrective step when the answer, or a prose file written in the run, holds a number,
+  quote or URL that no source passage about the same item supports, a value found only through a search that already
+  contained it, or a URL that only failed to load. Offline it raised no false alarms in 45 coding sessions; in replays
+  Spark searched again or re-read sources after the note in 28 of 30 samples; live it fired twice in 18 questions, both
+  justified, both fixed.
+- Research check: a question about the world answered without any source gets one step asking for a search with the
+  installed tools. In replays Spark searched after the note in 60 of 60 samples.
+- Search queries lose numbers that no request or earlier result contains (the model's guesses): a guessed "1978" in
+  the iPhone query led to the wrong year in 8 of 10 replays, 0 of 10 without it.
+- Project file map in the system message: Spark read a named file directly 10/10 with it, 2/10 without.
+- Today's date in the system message: searches for "latest" named the current year 10/10 with it, 0/10 without.
+- Syntax check after edit and write (Python, JavaScript, TypeScript, Rust, Go, when the parser is installed) reports a
+  broken file in the same tool result.
+- Path-guard blocks say the way forward and list matching project files.
+- Web results from any tool are shortened by their hits (each hit's title and URL, best passages first).
+- Optional reranker (`MODEL=reranker`, Qwen3-Reranker-0.6B on port 8082): while it runs, a cleared result keeps the
+  passages it scores highest for the request item the call served. The answer stayed in 238 of 254 answer-bearing
+  results at the clearing budget, against 153 with line matching; in replays of the iPhone write step the wrong year
+  fell from 8 to 3 of 10 (thinking off) and 5 to 2 (low); live research scores were level (40 and 41 of 42). Without it, line
+  matching is used.
+- Optional descry integration: when `descry-mcp` is installed, each session starts it and the system message lists the
+  symbols matching the prompt (name and file:line), found in code, with no tools added for the model. On a large Rust
+  repository (12 navigation questions, 3 rounds): 36/36 with descry (either embedding model) against 33/36 without,
+  with 121-143 tool calls against 260.
+- `launchers/searxng.sh` / `.bat`: set up, check and tear down a local SearXNG for web search without an API key.
+
+### Changed
+
+- Thinking is low by default for every prompt, with a per-request budget (1,024 tokens low, 4,096 high, at most half
+  the reply limit). Off vs low vs high: research 38/42, 40/42, 27/42 (high failed to finish one run); write-up 2/3,
+  3/3, 3/3 finished; coding 12/12 at every level.
+- An edit that starts on LFM3 continues on Spark (local-code tasks 30/30 vs 28/30 on LFM3 alone).
+- The reply limit is set from the measured request size (stale limits of 1 or 17 tokens previously cut replies).
+- The web search result-count cap is removed; results are shortened by their hits instead.
+- Kept tool results use half of what Spark's window leaves, without a fixed 16,384-token cap. The cap never bound at
+  the default 32k slot but held a 64k slot at 16k of ~28k: roles write-ups on a large Rust repository at 64k wrote the
+  document in 2 of 4 runs with it and 3 of 4 without (rubric coverage 3 and 5 vs 6, 4 and 7 of 10). At 32k neither
+  finished; the README says large-repo write-ups need a larger Spark slot.
+- Cleared local reads and command output are recalled while current (a read until its file changes, other output until
+  any file does), and a task without a list gets one recall query per clause. In replays this restored the passages of
+  re-read files but did not by itself stop the re-reading; the window size did.
+
+### Fixed
+
+- Clearing never applied (context edits were sent in the wrong shape).
+- Six parallel searches overflowed the context (39,699 tokens): parallel calls now share the room for new results.
+- Thinking could use a whole reply and leave no answer; a reply cut off at the limit now continues.
+- Product names in camel case (iPhone, eBay, macOS) routed research questions to LFM3 as local code.
+- Source-check false alarms found in validation runs, each fixed with a test and checked offline over all saved sessions
+  (flags removed, none added): an HTTP status reported from a failed call, read with that call's URL; quoted labels of
+  three words or fewer; a run-together power copied from a source (2136,279,841); line numbers into files, now checked
+  against the numbered lines of the reads (a wrong one is still named); a quoted doc comment spanning lines; a URL that
+  a web call fetched, or that a fetched page links to relatively.
+- Numbers the model guessed in a query no longer decide which lines of a result are kept (the iPhone case kept four
+  1978 passages and dropped the 2007 one).
+- Security: recall never arrives as a user turn; syntax checkers run isolated (`python -I`, neutral directory); git and
+  llama-server never run from the project directory, so a planted `git` there cannot run on Windows; the project map
+  runs git with fsmonitor off; reads follow regular files only.
+
 ## [0.2.2]
 
 ### Fixed

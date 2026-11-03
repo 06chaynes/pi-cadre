@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chooseModel, estimateTokens, promptText, routeRequest } from "./router.ts";
+import { chooseModel, promptText, researchQuestion, routeRequest } from "./router.ts";
 
-test("questions and single-spot edits go to LFM3", () => {
+test("questions about local code and single-spot edits go to LFM3", () => {
   for (const prompt of [
     "What does Inventory.available in inventory/store.py return? Answer in one sentence.",
-    "Where is the reservation released?",
-    "Explain how reserve works",
+    "Where does `reserve` release the reservation?",
+    "Explain how this function works",
     "Why does test_commit_ships_reserved_units fail?",
     "Add a one-line docstring to the add method in inventory/store.py.",
     "Fix the typo in the README heading",
@@ -17,7 +17,18 @@ test("questions and single-spot edits go to LFM3", () => {
   }
 });
 
-test("multi-step and open-ended work goes to Spark", () => {
+test("questions that may need research go to Spark", () => {
+  // LFM3 searched for "Linux 1.0" when asked about the first Linux release and answered about the wrong release.
+  for (const prompt of [
+    "What was the first sentence in the release notes of the first release of linux?",
+    "What year was the largest prime number found so far?",
+    "How long can a sperm whale hold it's breath while diving on average?",
+  ]) {
+    assert.equal(chooseModel(prompt), "spark", prompt);
+  }
+});
+
+test("multi-step and open-ended work goes to Spark (as before)", () => {
   for (const prompt of [
     "The test test_commit_ships_reserved_units in tests/test_store.py fails. Diagnose the root cause, fix it in inventory/store.py, and run python3 -m pytest -q to confirm all tests pass.",
     "Add a method restock_report(self, threshold) to Inventory in inventory/store.py that returns a sorted list of SKUs whose available quantity is below threshold. Add tests for it in tests/test_store.py, then run python3 -m pytest -q.",
@@ -46,7 +57,7 @@ test("promptText reads the last user message in string or block form", () => {
 const spark = { id: "spark", contextWindow: 32768, maxTokens: 8192 } as any;
 const lfm3 = { id: "lfm3", contextWindow: 16384, maxTokens: 4096 } as any;
 const request = (extra: Record<string, unknown>) =>
-  ({ thinkingLevel: "medium", messages: [{ role: "user", content: "What does reserve do?" }], ...extra }) as any;
+  ({ thinkingLevel: "medium", messages: [{ role: "user", content: "What does `reserve` do?" }], ...extra }) as any;
 
 test("a user request picks a model from the prompt and keeps the selected thinking level", () => {
   assert.deepEqual(routeRequest(request({ reason: "user" }), { spark, lfm3 }), { model: lfm3, thinkingLevel: "medium" });
@@ -73,23 +84,56 @@ test("direct requests and an unavailable LFM3 go to Spark", () => {
   assert.equal(routeRequest(request({ reason: "continuation", previous }), { spark }).model, spark);
 });
 
-// A web search result about 30,000 tokens long, as in the session that overflowed LFM3's 16k slot.
-const searchResult = { role: "toolResult", content: [{ type: "text", text: "Mersenne prime record table row. ".repeat(3000) }] };
-
-test("estimateTokens counts every message's text conservatively", () => {
-  assert.ok(estimateTokens([searchResult]) > 30000);
-  assert.ok(estimateTokens([{ role: "user", content: "What does reserve do?" }]) < 20);
+test("a file name in any language counts as local code; abbreviations and web domains do not", () => {
+  for (const prompt of ["What does main.swift do?", "What does Program.cs return?", "What does schema.sql define?", "What does init.lua load?", "What does vite.config.mts export?"]) {
+    assert.equal(chooseModel(prompt), "lfm3", prompt);
+  }
+  for (const prompt of ["What is the tallest mountain, e.g. in Asia?", "What does example.com say about Tokyo?", "Who runs wikipedia.org?"]) {
+    assert.equal(chooseModel(prompt), "spark", prompt);
+  }
 });
 
-test("a turn moves to Spark when its conversation no longer fits LFM3", () => {
+test("an edit that started on LFM3 continues on Spark; a question stays on LFM3", () => {
+  const lfm3 = { id: "lfm3" };
+  const spark = { id: "spark" };
   const previous = { model: lfm3, thinkingLevel: "off" };
-  const messages = [{ role: "user", content: "What year was the largest prime found?" }, searchResult];
-  assert.equal(routeRequest(request({ reason: "continuation", previous, messages }), { spark, lfm3 }).model, spark);
-  const small = [{ role: "user", content: "What does reserve do?" }, { role: "toolResult", content: [{ type: "text", text: "def reserve(): ..." }] }];
-  assert.equal(routeRequest(request({ reason: "continuation", previous, messages: small }), { spark, lfm3 }).model, lfm3);
+  const continuing = (prompt: string) => routeRequest({ reason: "continuation", previous, thinkingLevel: "off", messages: [{ role: "user", content: prompt }] }, { spark, lfm3 }).model.id;
+  // In local-code tasks, LFM3 alone placed a doc comment on the wrong declaration (4/6); starting on LFM3 and
+  // finishing on Spark was right every time (30/30).
+  assert.equal(continuing("Add a one-line doc comment to `release` in src/inventory.ts saying what it does."), "spark");
+  assert.equal(continuing("Rename the method `release` to `unreserve` in src/lib.rs."), "spark");
+  assert.equal(continuing("What does `available` in inventory/store.py return?"), "lfm3");
 });
 
-test("a question goes to Spark when the history is too long for LFM3", () => {
-  const messages = [searchResult, { role: "user", content: "What does reserve do?" }];
-  assert.equal(routeRequest(request({ reason: "user", messages }), { spark, lfm3 }).model, spark);
+test("researchQuestion is true for questions about the world and explicit research requests, not for local code or changes", () => {
+  for (const prompt of [
+    "How long can a sperm whale hold it's breath while diving on average?",
+    "Who won the 2024 Nobel Prize in Physics?",
+    "What are the latest research results in the field of ML",
+    "Research each of these and write the results to research.md as a markdown table.",
+    "Look up the population of Tokyo.",
+  ]) {
+    assert.equal(researchQuestion(prompt), true, prompt);
+  }
+  for (const prompt of [
+    "What does Inventory.available in inventory/store.py return?",
+    "Where does `reserve` release the reservation?",
+    "Explain how this function works",
+    "Fix the typo in the README heading",
+    "Add a method restock_report(self, threshold) to Inventory.",
+  ]) {
+    assert.equal(researchQuestion(prompt), false, prompt);
+  }
+});
+
+test("product names in camel case (iPhone, eBay, macOS) do not make a question local code; identifiers still do", () => {
+  // The real failure: "What year was the first iPhone released?" went to LFM3 as a local-code question, and LFM3 made
+  // 25-28 malformed tool calls per run where Spark made 2-4.
+  for (const prompt of ["What year was the first iPhone released?", "When did eBay launch?", "Which macOS version added Stage Manager?", "How much did the first iPad cost?"]) {
+    assert.equal(chooseModel(prompt), "spark", prompt);
+    assert.equal(researchQuestion(prompt), true, prompt);
+  }
+  for (const prompt of ["What does restockReport return?", "Where is isEnabled set?", "How does onClick get its handler?"]) {
+    assert.equal(chooseModel(prompt), "lfm3", prompt);
+  }
 });

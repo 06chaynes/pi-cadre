@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { keywords, readLinesCapped, shortenText, unseenNote } from "./unseen.ts";
+import { readLinesCapped, shortenHits, shortenText, unseenNote } from "./unseen.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -18,10 +18,6 @@ function notesFile() {
 }
 
 const truncated = (outputLines: number, totalLines = 1401) => ({ truncation: { truncated: true, outputLines, totalLines } });
-
-test("keywords keeps the distinctive words of a request", () => {
-  assert.deepEqual(keywords(QUESTION), ["year", "largest", "known", "prime", "found", "notes", "txt"]);
-});
 
 test("a truncated read gets the unseen lines that match the request", () => {
   const cwd = notesFile();
@@ -91,4 +87,76 @@ test("shortenText leaves text within the limit unchanged and cuts one long line 
   assert.equal(shortenText("short", "anything", 100), "short");
   const long = shortenText("x".repeat(10_000), "anything", 1_000);
   assert.ok(long.length <= 1_000 && long.startsWith("xxx"));
+});
+
+/** A web_search result in the format of @ollama/pi-web-search: numbered hits, each with a URL line and its text. */
+function searchHits(hits: { title: string; url: string; body: string }[]) {
+  return hits.map((h, i) => `${i + 1}. ${h.title}\n   URL: ${h.url}\n   ${h.body}`).join("\n\n");
+}
+
+test("a shortened search result keeps every hit's title and URL and the passages that best match the search", () => {
+  const filler = (word: string) => Array.from({ length: 4000 }, (_, i) => `${word} entry ${i} of a long index page.`).join("\n");
+  const text = searchHits([
+    { title: "Proceedings of Machine Learning Research", url: "https://proceedings.mlr.press/v267/", body: filler("Paper") },
+    { title: "State of AI Report 2025", url: "https://www.stateof.ai/2025", body: filler("Slide") },
+    { title: "Nature Machine Intelligence", url: "https://www.nature.com/natmachintell/", body: filler("Article") },
+    { title: "arXiv cs.LG recent", url: "https://arxiv.org/list/cs.LG/recent", body: filler("Listing") + "\n\nThe latest ML results: reasoning models now lead the benchmark, per the 2026 survey.\n\n" + filler("Listing") },
+  ]);
+  const short = shortenHits(text, '{"query":"latest ML research results"} What are the latest research results in the field of ML', 3000);
+  assert.ok(short !== undefined && short.length <= 3000, `${short?.length} characters`);
+  for (const url of ["proceedings.mlr.press/v267", "stateof.ai/2025", "nature.com/natmachintell", "arxiv.org/list/cs.LG/recent"]) assert.ok(short.includes(url), url);
+  assert.match(short, /The latest ML results: reasoning models now lead the benchmark/);
+  assert.match(short, /^\[Result shortened from [\d,]+ characters: every hit's title and URL, then the passages that best match the request\. Fetch a URL for its full text\.\]/);
+});
+
+test("hits whose URL comes last (pi-web-access's format) are recognized the same way", () => {
+  const filler = Array.from({ length: 3000 }, (_, i) => `Unrelated sentence ${i} about something else entirely.`).join(" ");
+  const hit = (snippet: string, title: string, url: string) => `${snippet}\nSource: ${title} (${url})`;
+  const text = [
+    "**Provider:** searxng",
+    hit(filler, "Index page", "https://a.example/index"),
+    hit("Hopfield and Hinton won the 2024 Nobel Prize in Physics.", "Press release", "https://www.nobelprize.org/prizes/physics/2024/press-release/"),
+    hit(filler, "Other page", "https://c.example/other"),
+  ].join("\n\n");
+  const short = shortenHits(text, '{"queries":["2024 Nobel Prize in Physics"]} Who won the 2024 Nobel Prize in Physics?', 2000);
+  assert.ok(short !== undefined && short.length <= 2000, `${short?.length} characters`);
+  for (const url of ["a.example/index", "nobelprize.org/prizes/physics/2024/press-release", "c.example/other"]) assert.ok(short.includes(url), url);
+  assert.match(short, /Hopfield and Hinton won the 2024 Nobel Prize in Physics\./);
+});
+
+test("when the hits do not all fit, the hits whose passages best match the request keep them, and a repeated source list is not counted", () => {
+  // The real failure: giving every hit an equal share cut every snippet away, so a cleared Nobel result kept ten source
+  // lines (five hits plus pi-web-access's trailing Sources list) and no winner's name.
+  const hit = (snippet: string, title: string, url: string) => `${snippet}\nSource: ${title} (${url})`;
+  const answer = 'The Nobel Prize in Physics 2024 was awarded jointly to John J. Hopfield and Geoffrey Hinton "for foundational discoveries and inventions that enable machine learning with artificial neural networks"';
+  const urls = [
+    "https://www.nobelprize.org/prizes/physics/2024/summary/",
+    "https://en.m.wikipedia.org/wiki/2024",
+    "https://www.nobelprize.org/prizes/physics/2024/press-release/",
+    "https://en.m.wikipedia.org/wiki/2024_United_States_presidential_election",
+    "https://en.wikipedia.org/wiki/List_of_Nobel_laureates_in_Physics",
+  ];
+  const text = [
+    "**Provider:** searxng",
+    hit(answer, "The Nobel Prize in Physics 2024 - NobelPrize.org", urls[0]),
+    hit("2024 (MMXXIV) was a leap year starting on Monday of the Gregorian calendar, the 2024th year of the Common Era (CE) and Anno …", "2024 - Wikipedia", urls[1]),
+    hit(`Oct 8, 2024 · ${answer}`, "Press release: The Nobel Prize in Physics 2024 - NobelPrize.org", urls[2]),
+    hit("According to disinformation experts and intelligence agencies, Russia spread disinformation ahead of the 2024 election to damage …", "2024 United States presidential election - Wikipedia", urls[3]),
+    hit("The Nobel Prize in Physics (Swedish: Nobelpriset i fysik) is awarded annually by the Royal Swedish Academy of Sciences to scientists in the various fields of physics.", "List of Nobel laureates in Physics - Wikipedia", urls[4]),
+    "---",
+    ["**Sources:**", ...urls.map((url, i) => `${i + 1}. Title ${i + 1}\n   ${url}`)].join("\n"),
+  ].join("\n\n");
+  const query = '{"queries":["2024 Nobel Prize in Physics winner"]} Research each of these and write research.md: 4. Who won the 2024 Nobel Prize in Physics.';
+  const short = shortenHits(text, query, 1000);
+  assert.ok(short !== undefined && short.length <= 1000, `${short?.length} characters`);
+  assert.match(short, /awarded jointly to John J\. Hopfield and Geoffrey Hinton/);
+  assert.doesNotMatch(short, /\*\*Sources:\*\*/);
+});
+
+test("text that is not a list of search hits is left to shortenText", () => {
+  assert.equal(shortenHits("x".repeat(10_000), "query", 3000), undefined);
+});
+
+test("readLinesCapped refuses device files instead of reading forever", () => {
+  assert.equal(readLinesCapped("/dev/zero", 1024), undefined);
 });

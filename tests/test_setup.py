@@ -134,3 +134,11 @@ def test_server_launcher_gguf_path_and_extra_args(tmp_path):
     rc, out = run_launcher(tmp_path, "start_llama_server", "-m", "/m.gguf", "--", "--verbose")
     assert rc == 0
     assert out[:3] == ["llama-server", "-m", "/m.gguf"] and out[-2:] == ["--jinja", "--verbose"]
+
+
+def test_server_launcher_reranker(tmp_path):
+    rc, out = run_launcher(tmp_path, "start_llama_server", "-m", "reranker")
+    assert rc == 0
+    assert out == ["llama-server", "-hf", "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "--host", "127.0.0.1", "--port", "8082",
+                   "--ctx-size", "8192", "--parallel", "1", "-ngl", "99", "--jinja",
+                   "--embedding", "--pooling", "rank", "--reranking", "-ub", "8192", "-b", "8192"]

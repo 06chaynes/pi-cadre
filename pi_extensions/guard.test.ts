@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -100,4 +100,24 @@ test("compares paths in on-disk case on case-insensitive file systems", (t) => {
   assert.ok(guardReason("read", { path: join(base, "Other").toLowerCase() }, cwd, base));
   assert.ok(guardReason("bash", { command: `ls ${join(base, "other").toUpperCase()}` }, cwd, base));
   assert.equal(guardReason("write", { path: join(base, "proj", "x.py") }, cwd, base), undefined);
+});
+
+test("a block says the way forward: project paths, and web_search for information from the web", () => {
+  const reason = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me")!;
+  assert.match(reason, /Paths inside the project work: relative paths start at \/work\/inv\./);
+  assert.match(reason, /For information from the web, use web_search\./);
+});
+
+test("a blocked search for a name lists the project files with that name, without running the command", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "cadre-find-"));
+  mkdirSync(join(cwd, "inventory"));
+  mkdirSync(join(cwd, "node_modules", "pkg"), { recursive: true });
+  writeFileSync(join(cwd, "inventory", "store.py"), "");
+  writeFileSync(join(cwd, "node_modules", "pkg", "store.py"), "");
+  for (const command of ['find / -name "store.py" 2>/dev/null', "find / -path '*inventory*' -name '*.py'", "ls /Users/me/Documents/lfm-test/inventory/store.py"]) {
+    const reason = guardReason("bash", { command }, cwd, "/Users/me")!;
+    assert.match(reason, /Project files matching: inventory\/store\.py\b/, command);
+    assert.doesNotMatch(reason, /node_modules/, command);
+  }
+  assert.doesNotMatch(guardReason("bash", { command: "cat /etc/../Users/me/secret.txt" }, cwd, "/Users/me")!, /Project files matching/);
 });
