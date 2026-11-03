@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 
 import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
@@ -101,4 +101,21 @@ test("descryMcpCommand finds DESCRY_MCP_BIN or descry-mcp on PATH", () => {
   assert.equal(descryMcpCommand({ DESCRY_MCP_BIN: bin, PATH: "" }), bin);
   assert.equal(descryMcpCommand({ PATH: `/nonexistent:${dir}` }), bin);
   assert.equal(descryMcpCommand({ PATH: "/nonexistent" }), undefined);
+});
+
+test("a descry-mcp planted in the project is never found through a relative PATH entry or DESCRY_MCP_BIN", () => {
+  // descry starts on its own when found, in the project directory: a relative entry (".", "bin") would resolve there.
+  const project = mkdtempSync(join(tmpdir(), "cadre-planted-"));
+  const { bin } = fakeServer();
+  writeFileSync(join(project, "descry-mcp"), readFileSync(bin));
+  chmodSync(join(project, "descry-mcp"), 0o755);
+  const saved = process.cwd();
+  process.chdir(project);
+  try {
+    assert.equal(descryMcpCommand({ PATH: `.${delimiter}/nonexistent` }), undefined);
+    assert.equal(descryMcpCommand({ DESCRY_MCP_BIN: "descry-mcp", PATH: "" }), undefined);
+    assert.equal(descryMcpCommand({ DESCRY_MCP_BIN: "./descry-mcp", PATH: "" }), undefined);
+  } finally {
+    process.chdir(saved);
+  }
 });

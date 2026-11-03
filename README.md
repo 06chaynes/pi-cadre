@@ -127,7 +127,8 @@ code, so none of this depends on the model remembering to do it:
   `PATH`, or `DESCRY_MCP_BIN`), each session starts its MCP server in the working directory and the system message
   lists the symbols matching the prompt (name and file:line). On a large Rust repository this took "which function, in
   which file" questions from 33 to 36 of 36, with about half the tool calls. The first index of a large repository
-  takes a while; see descry's documentation for its settings.
+  takes a while; see descry's documentation for its settings. Only absolute `PATH` entries are searched, and on Windows
+  the integration is not yet supported.
 - **Broken edits are reported.** After an edit or write, the file is parsed (Python, JavaScript, TypeScript, Rust, or
   Go, when the parser is installed) and a syntax error is reported in the same tool result.
 - **Thinking.** Thinking is low for every prompt. On a 12-item research task, off, low and high scored 38, 40 and 27

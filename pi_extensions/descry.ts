@@ -8,7 +8,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 
 import { keywords } from "./text.ts";
@@ -20,11 +20,15 @@ const PROTOCOL_VERSION = "2025-06-18";
 // The first search after startup waits for the embedding model (about 9 s on a 4B-model machine); later ones are fast.
 const SEARCH_TIMEOUT_MS = 15_000;
 
-/** The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH; undefined when neither is there. */
+/**
+ * The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH; undefined when neither is there. Only
+ * absolute paths count: the server starts on its own in the project directory, where a relative PATH entry (".",
+ * "bin") or a relative DESCRY_MCP_BIN would find a descry-mcp the project itself supplies.
+ */
 export function descryMcpCommand(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const candidates = [env.DESCRY_MCP_BIN, ...(env.PATH ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, "descry-mcp"))];
+  const candidates = [env.DESCRY_MCP_BIN, ...(env.PATH ?? "").split(delimiter).filter(isAbsolute).map((dir) => join(dir, "descry-mcp"))];
   for (const candidate of candidates) {
-    if (!candidate) continue;
+    if (!candidate || !isAbsolute(candidate)) continue;
     try {
       accessSync(candidate, constants.X_OK);
       return candidate;
