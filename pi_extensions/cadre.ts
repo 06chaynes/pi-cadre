@@ -94,6 +94,18 @@ const PROSE_FILE = /\.(md|markdown|txt|rst|adoc|org)$/i;
 const MAX_CLAIMS_NAMED = 6;
 const CLAIM_CONTEXT_CHARS = 160;
 const LOCAL_TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+// Query-like arguments of a web tool, from which guessed numbers are removed before the call runs.
+const QUERY_KEYS = ["query", "queries", "q", "search_query", "searchQuery"];
+
+/** Removes from `input`'s query-like fields the numbers that `known` does not contain (see withoutGuesses). */
+function cleanQueries(input: Record<string, unknown>, known: string) {
+  const clean = (query: string) => withoutGuesses(query, known).replace(/\s{2,}/g, " ").trim();
+  for (const key of QUERY_KEYS.filter((k) => k in input)) {
+    const value = input[key];
+    if (typeof value === "string") input[key] = clean(value);
+    else if (Array.isArray(value)) input[key] = value.map((v) => (typeof v === "string" ? clean(v) : v));
+  }
+}
 
 // The digest condenses the current request's steps before the last KEEP_STEPS, each as its call and a one-line outcome.
 const KEEP_STEPS = 3;
@@ -258,15 +270,7 @@ export default async function (pi: ExtensionAPI) {
   const branchMessages = (ctx: ExtensionContext) => ((ctx.sessionManager?.getBranch() ?? []) as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
 
   const neutralizeQueries = (input: Record<string, unknown>, ctx: ExtensionContext) => {
-    const keys = ["query", "queries", "q", "search_query", "searchQuery"].filter((key) => key in input);
-    if (!keys.length) return;
-    const known = knownByCall(branchMessages(ctx))("");
-    const clean = (query: string) => withoutGuesses(query, known).replace(/\s{2,}/g, " ").trim();
-    for (const key of keys) {
-      const value = input[key];
-      if (typeof value === "string") input[key] = clean(value);
-      else if (Array.isArray(value)) input[key] = value.map((v) => (typeof v === "string" ? clean(v) : v));
-    }
+    cleanQueries(input, knownByCall(branchMessages(ctx))(""));
   };
 
   /** Tokens in a tool result on the densest tokenizer among the running servers, since either model may read it. */
@@ -709,15 +713,27 @@ export default async function (pi: ExtensionAPI) {
     }
     {
       const sessionId = ctx.sessionManager.getSessionId?.();
-      // A result does not support the numbers its own call guessed: that search went looking for them.
+      // A result does not support the numbers its own call guessed: that call went looking for them. Guesses are read
+      // from the arguments as the call ran: a web tool's query lost its guessed numbers before it ran (the session
+      // keeps the model's original), so only guesses left elsewhere, as in a fetched URL, count.
       const knownFor = knownByCall(branch);
       const argsOf = new Map<string, string>();
-      for (const m of branch) if (m.role === "assistant") for (const b of m.content ?? []) if (b.type === "toolCall") argsOf.set(b.id, JSON.stringify(b.arguments ?? {}));
+      const asRun = new Map<string, string>();
+      for (const m of branch) {
+        if (m.role !== "assistant") continue;
+        for (const b of m.content ?? []) {
+          if (b.type !== "toolCall") continue;
+          const args = { ...(b.arguments ?? {}) };
+          argsOf.set(b.id, JSON.stringify(args));
+          if (!LOCAL_TOOLS.has(b.name)) cleanQueries(args, knownFor(b.id));
+          asRun.set(b.id, JSON.stringify(args));
+        }
+      }
       const results = branch
         .filter((m) => m.role === "toolResult" && !m.isError)
         .map((m) => ({
           text: (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m),
-          guessed: guesses(argsOf.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
+          guessed: guesses(asRun.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
         }));
       // A failed call's error, read with the call that failed (its URL names the site), supports what the answer
       // reports about the failure ("the Britannica URL returns 403").
@@ -751,10 +767,10 @@ export default async function (pi: ExtensionAPI) {
             .map((line: string, i: number) => `${offset + i}: ${line}`)
             .join("\n");
         });
-      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, ...numbered, fetched.join("\n")];
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, ...numbered];
       const evidence = results.map((r) => r.text);
       for (const [where, text] of produced) {
-        for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence)) {
+        for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence, fetched)) {
           if (named.has(claim.value) || named.size >= MAX_CLAIMS_NAMED) continue;
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
