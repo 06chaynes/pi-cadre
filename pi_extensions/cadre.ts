@@ -81,6 +81,11 @@ const SYMBOLS_MAX_CHARS = 1200;
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
+// When clearing has to run, kept results go down to this share of their room, so clearing (which makes the server
+// rebuild the prompt from the first cleared result on) runs less often: 1-2 times per large write-up instead of 5-8.
+const CLEAR_TO_SHARE = 0.6;
+// Most characters of reasoning kept from earlier steps between clearing events; past it, all but the newest step's go.
+const REASONING_KEEP_MAX_CHARS = 12_000;
 // Pi's own local tools: their output can go stale (a file edited since it was read), and running them again is exact,
 // so their results are never recalled. Every other tool's results can be, whichever extension provides it.
 // Files whose text is prose an answer may put claims in; code files are left to the syntax check.
@@ -429,6 +434,8 @@ export default async function (pi: ExtensionAPI) {
   });
 
   let continued = false;
+  // Steps with a timestamp at or before this lose their reasoning in requests (see withoutEarlierReasoning).
+  let reasoningKeptAfter = 0;
   // The project file map for the current prompt (built at its start), or "" when off.
   let map = "";
   // descry's symbols for the current prompt, or "" when descry is not installed or nothing matched.
@@ -602,7 +609,12 @@ export default async function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
     const keep = resultRoom();
-    const edits = await clearResults(event.context.contextEntries, keep, new Set(event.toolResultEntryIds), "to make room");
+    const unseen = new Set(event.toolResultEntryIds);
+    if (!(await clearResults(event.context.contextEntries, keep, unseen, "to make room")).length) return undefined;
+    const edits = await clearResults(event.context.contextEntries, Math.floor(keep * CLEAR_TO_SHARE), unseen, "to make room");
+    // The server rebuilds the prompt from the first cleared result on, so earlier steps' reasoning leaves now too.
+    const steps = event.context.contextEntries.flatMap((projected: any) => projected.messages).filter((m: any) => m?.role === "assistant");
+    reasoningKeptAfter = Math.max(reasoningKeptAfter, ...steps.map((m: any) => m.timestamp ?? 0));
     return edits.length ? { entries: edits } : undefined;
   });
 
@@ -770,11 +782,12 @@ export default async function (pi: ExtensionAPI) {
     return undefined;
   });
 
-  // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
-  // that compaction removed from context is restored in one message after the compaction summary.
-  // Before each request to a local model: reasoning from earlier steps leaves (Spark's template renders all of it, so
-  // with thinking on it would fill the window step by step), and passages of cleared web results that match the task
-  // come back (see withRecall). The session keeps everything.
+  // Before each request to a local model: reasoning of earlier steps leaves (Spark's template renders all of it, so with
+  // thinking on it would fill the window step by step), and passages of cleared results that match the task come back
+  // (see withRecall). Both change the request only when clearing runs or kept reasoning passes its budget, so between
+  // those events each request starts with the previous one and the server reuses its cached prompt: stripping the
+  // previous step's reasoning on every request made it rebuild that step and its result each time. The session keeps
+  // everything.
   pi.on("context", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
     let messages = withoutEarlierReasoning(event.messages);
@@ -782,12 +795,19 @@ export default async function (pi: ExtensionAPI) {
     return messages === event.messages ? undefined : { messages };
   });
 
-  /** `messages` with thinking blocks removed from every assistant message but the last; the same array if none had any. */
+  /**
+   * `messages` with thinking removed from steps at or before reasoningKeptAfter (moved when clearing runs); when the
+   * reasoning kept after it passes REASONING_KEEP_MAX_CHARS, the mark moves to the step before the newest. The same
+   * array if nothing changed.
+   */
   const withoutEarlierReasoning = (messages: any[]) => {
-    const last = messages.findLastIndex((m) => m.role === "assistant");
+    const steps = messages.filter((m) => m.role === "assistant");
+    const thinking = (m: any) => (m.content ?? []).reduce((n: number, b: any) => n + (b.type === "thinking" ? String(b.thinking ?? "").length : 0), 0);
+    const kept = steps.filter((m) => (m.timestamp ?? 0) > reasoningKeptAfter).reduce((n, m) => n + thinking(m), 0);
+    if (kept > REASONING_KEEP_MAX_CHARS && steps.length > 1) reasoningKeptAfter = Math.max(reasoningKeptAfter, steps.at(-2).timestamp ?? 0);
     let changed = false;
-    const out = messages.map((m, i) => {
-      if (m.role !== "assistant" || i === last || !m.content?.some((b: any) => b.type === "thinking")) return m;
+    const out = messages.map((m) => {
+      if (m.role !== "assistant" || (m.timestamp ?? 0) > reasoningKeptAfter || !m.content?.some((b: any) => b.type === "thinking")) return m;
       changed = true;
       return { ...m, content: m.content.filter((b: any) => b.type !== "thinking") };
     });
@@ -856,11 +876,7 @@ export default async function (pi: ExtensionAPI) {
     if (!cleared.length) return undefined;
     const stored = cleared.map(({ source, text }) => ({ source, text }));
     const task = textOf([...branch].reverse().find((m: any) => m.role === "user") ?? {});
-    const step = [...messages].reverse().find((m: any) => m.role === "assistant");
-    const knownFor = knownByCall(branch);
-    const stepCalls = (step?.content ?? []).filter((b: any) => b.type === "toolCall");
-    const stepText = step ? `${textOf(step)} ${stepCalls.map((b: any) => withoutGuesses(JSON.stringify(b.arguments), knownFor(b.id))).join(" ")}` : "";
-    const found = recall(stored, taskQueries(task, stepText), RECALL_MAX_CHARS);
+    const found = recall(stored, taskQueries(task), RECALL_MAX_CHARS);
     if (!found.length) return undefined;
     const byCall = new Map<string, string[]>();
     for (const p of found) {

@@ -29,20 +29,19 @@ test("passages split at blank lines and stay within the size limit, keeping thei
 
 test("taskQueries makes one query per listed item, or one for the whole task", () => {
   const listed = "Research each of these:\n1. The year the largest known prime was found.\n2. How long a sperm whale holds its breath.";
-  assert.deepEqual(taskQueries(listed, ""), ["The year the largest known prime was found.", "How long a sperm whale holds its breath."]);
-  assert.deepEqual(taskQueries("What year was the largest prime found?", "web_search largest prime"), ["What year was the largest prime found? web_search largest prime"]);
+  assert.deepEqual(taskQueries(listed), ["The year the largest known prime was found.", "How long a sperm whale holds its breath."]);
+  assert.deepEqual(taskQueries("What year was the largest prime found?"), ["What year was the largest prime found?"]);
 });
 
-test("a task that lists nothing but has several clauses makes one query per clause, plus the current step", () => {
+test("a task that lists nothing but has several clauses makes one query per clause", () => {
   // One query for a long write-up prompt recalled at most one passage, and only one sharing 40% of all its terms.
   const task =
     "Write docs/idp-roles.md explaining how roles from an identity provider are granted and withdrawn. Cover: where group-to-role mappings are applied at login and in the periodic re-sync, how the provider's role sync mode is read, and how a failed role sync is recorded and cleared.";
-  assert.deepEqual(taskQueries(task, "read auth_oidc.rs"), [
+  assert.deepEqual(taskQueries(task), [
     "Write docs/idp-roles.md explaining how roles from an identity provider are granted and withdrawn.",
     "where group-to-role mappings are applied at login and in the periodic re-sync",
     "how the provider's role sync mode is read",
     "and how a failed role sync is recorded and cleared.",
-    "read auth_oidc.rs",
   ]);
 });
 

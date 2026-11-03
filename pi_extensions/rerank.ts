@@ -52,7 +52,7 @@ export function keepBest(passages: readonly string[], scores: readonly number[],
  * whole request when it lists fewer than two items or no item shares a word with the call.
  */
 export function itemFor(call: string, request: string): string {
-  const items = taskQueries(request, "");
+  const items = taskQueries(request);
   if (items.length < 2) return request.trim();
   const scores = bm25(items).score(call);
   let best = -1;
