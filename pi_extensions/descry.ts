@@ -11,17 +11,11 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 
-import { keywords } from "./text.ts";
+import { keywords, safeName } from "./text.ts";
 
 const HEADING = "Code symbols matching the request (from descry):";
 const MAX_RESULTS = 12;
 const MAX_TERMS = 12;
-// Longest file or symbol name listed; names come from the repository, which may not be trusted.
-const MAX_NAME_CHARS = 200;
-// Control characters (newlines among them) in a repository's file or symbol name would put the repository's own lines
-// into the system message, where the list goes; git C-quotes such names in the project map, descry returns them as-is.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-const safeName = (value: unknown): value is string => typeof value === "string" && value.length <= MAX_NAME_CHARS && !CONTROL.test(value);
 const PROTOCOL_VERSION = "2025-06-18";
 // The first search after startup waits for the embedding model (about 9 s on a 4B-model machine); later ones are fast.
 const SEARCH_TIMEOUT_MS = 15_000;

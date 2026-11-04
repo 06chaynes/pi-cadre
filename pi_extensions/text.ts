@@ -88,3 +88,14 @@ export function withoutGuesses(text: string, known: string): string {
   const flat = known.replace(/,/g, "");
   return text.replace(NUMBER, (match, _space, n: string) => (flat.includes(n.replace(/,/g, "")) ? match : ""));
 }
+
+// Longest file or symbol name cadre puts in the system message; names come from the project, which may not be trusted.
+const MAX_NAME_CHARS = 200;
+// Control characters (newlines among them) and line or paragraph separators in a file or symbol name would put the
+// project's own lines into the system message.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/** Whether a name from the project (a file path, a symbol) is safe to list in the system message. */
+export function safeName(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_NAME_CHARS && !CONTROL.test(value);
+}
