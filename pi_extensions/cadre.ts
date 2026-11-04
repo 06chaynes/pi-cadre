@@ -648,8 +648,8 @@ export default async function (pi: ExtensionAPI) {
     }
     if (!sourcesChecked) {
       sourcesChecked = true;
-      const note = sourceCheck(ctx);
-      if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: note, display: true }] };
+      const checked = sourceCheck(ctx);
+      if (checked) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: checked.note, display: true, details: { quoted: checked.quoted } }] };
     }
     const edits = await clearResults(event.context.contextEntries, 0, new Set(), "after the answer");
     return edits.length ? { entries: edits } : undefined;
@@ -671,9 +671,9 @@ export default async function (pi: ExtensionAPI) {
 
   /**
    * A note for the model when its answer, or a prose file it wrote in this run, cites a URL that appears only in failed
-   * tool calls, or (with the claims option) holds a number, quote or URL that no source supports. Sources are the user's
-   * messages, the system prompt, every result that succeeded, and the saved originals of shortened results. Undefined
-   * when everything checks out.
+   * tool calls, or holds a number, quote or URL that no source supports, with the tool text it refers to by number
+   * (`quoted`: failed calls' errors, closest source passages). Sources are the user's messages, the system prompt,
+   * every result that succeeded, and the saved originals of shortened results. Undefined when everything checks out.
    */
   const sourceCheck = (ctx: ExtensionContext) => {
     const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
@@ -710,12 +710,16 @@ export default async function (pi: ExtensionAPI) {
     const final = [...run].reverse().find((m) => m.role === "assistant" && textOf(m).trim());
     if (final) produced.push(["your answer", textOf(final)]);
     const lines: string[] = [];
+    // Text from tools (failed calls' errors, source passages) the note refers to by number; it reaches the model as a
+    // tool result before the note (see withSourceQuotes), never in the note, which Pi sends as a user turn.
+    const quoted: string[] = [];
     const named = new Set<string>();
     for (const [where, text] of produced) {
       for (const url of urls(text)) {
         if (!failed.has(url) || read.has(url) || named.has(url)) continue;
         named.add(url);
-        lines.push(`${where} cites ${url}, which failed to load (${failed.get(url)}) and appears in no tool result that succeeded.`);
+        quoted.push(failed.get(url)!);
+        lines.push(`${where} cites ${url}, which failed to load (its error is [${quoted.length}]) and appears in no tool result that succeeded.`);
       }
     }
     {
@@ -797,12 +801,15 @@ export default async function (pi: ExtensionAPI) {
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
           const why = circular ? "appears only in results of a search that already contained it, so no source confirms it" : "appears in no source";
-          lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage: "${passage}"` : ""}.`);
+          if (passage) quoted.push(passage);
+          lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage [${quoted.length}]` : ""}.`);
         }
       }
     }
     if (!lines.length) return undefined;
-    return `Source check:\n- ${lines.join("\n- ")}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it); for a value only your own search contained, search again without it. Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
+    const where = quoted.length ? "\nThe numbered passages and errors are in the cadre_sources result above." : "";
+    const note = `Source check:\n- ${lines.join("\n- ")}${where}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it); for a value only your own search contained, search again without it. Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
+    return { note, quoted };
   };
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -829,6 +836,7 @@ export default async function (pi: ExtensionAPI) {
   pi.on("context", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
     let messages = withoutEarlierReasoning(event.messages);
+    messages = withSourceQuotes(messages);
     messages = withRecall(messages, ctx) ?? messages;
     return messages === event.messages ? undefined : { messages };
   });
@@ -850,6 +858,19 @@ export default async function (pi: ExtensionAPI) {
       return { ...m, content: m.content.filter((b: any) => b.type !== "thinking") };
     });
     return changed ? out : messages;
+  };
+
+  /**
+   * `messages` with the passages and errors a source-check note quotes placed just before it as a cadre_sources tool
+   * result; the same array when no note quotes any.
+   */
+  const withSourceQuotes = (messages: any[]) => {
+    if (!messages.some((m) => m.role === "custom" && m.customType === "cadre-sources" && m.details?.quoted?.length)) return messages;
+    return messages.flatMap((m) => {
+      const quoted: unknown = m.role === "custom" && m.customType === "cadre-sources" ? m.details?.quoted : undefined;
+      if (!Array.isArray(quoted) || !quoted.length) return [m];
+      return [...toolPair("cadre_sources", {}, quoted.map((q, i) => `[${i + 1}] ${String(q)}`).join("\n\n")), m];
+    });
   };
 
   /**

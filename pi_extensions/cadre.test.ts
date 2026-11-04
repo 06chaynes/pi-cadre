@@ -890,7 +890,10 @@ test("a URL cited only from a failed call gets one corrective step at the end of
   assert.equal(result.continue, true);
   const [note] = result.entries;
   assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
-  assert.match(note.content, new RegExp(`research\\.md cites ${bad.replace(/[.?]/g, "\\$&")}, which failed to load \\(Fetch API error \\(status 404\\)`));
+  assert.match(note.content, new RegExp(`research\\.md cites ${bad.replace(/[.?]/g, "\\$&")}, which failed to load \\(its error is \\[1\\]\\)`));
+  // Text from a failed call stays out of the user-role note; it is shown as tool output (see the cadre_sources test).
+  assert.doesNotMatch(note.content, /Fetch API error/);
+  assert.match(note.details.quoted[0], /^Fetch API error \(status 404\)/);
   assert.match(note.content, /Replace a URL that failed with a source you retrieved\./);
   assert.equal((await settle(session))?.continue, undefined, "only once per run");
   const ok = await settle(build(true).session);
@@ -992,10 +995,32 @@ test("a value no source supports gets one corrective step naming it and quoting 
   const [note] = wrong.entries;
   assert.deepEqual([note.type, note.customType], ["custom_message", "cadre-sources"]);
   assert.match(note.content, /research\.md: 1978 \(in "\| First iPhone \| 1978 \|"\)/);
-  assert.match(note.content, /closest source passage: "The first iPhone was released on June 29, 2007/);
+  assert.match(note.content, /appears in no source; closest source passage \[1\]\./);
+  assert.doesNotMatch(note.content, /June 29, 2007/);
+  assert.match(note.details.quoted[0], /^The first iPhone was released on June 29, 2007/);
   assert.match(note.content, /correct it from a source, show how it was computed from one, or remove it/);
   const right = await settle(build("| First iPhone | 2007 |", 'Done. I followed "Emit ONLY code inside markdown blocks with exact language tags."'));
   assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
+});
+
+test("the source check's quoted passages reach the model as a tool result before its note, never in the note", async () => {
+  // The note goes to the model as a user turn; quoting a web page there gave a page's text the user's voice.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const quoted = ["The first iPhone was released on June 29, 2007 in the United States.", "Fetch API error (status 404)"];
+  const note = { role: "custom", customType: "cadre-sources", content: "Source check:\n- research.md: 1978 (in \"| First iPhone | 1978 |\") appears in no source; closest source passage [1].", display: true, details: { quoted }, timestamp: 50 };
+  const { session } = realSession([{ role: "user", content: "When was the first iPhone released?" }, answer("1978.")]);
+  const messages = [...session.buildSessionContext().messages, note];
+  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  const at = result.messages.findIndex((m: any) => m.role === "custom");
+  const [call, back] = result.messages.slice(at - 2, at);
+  assert.equal(call.role, "assistant");
+  assert.deepEqual([back.role, back.toolName], ["toolResult", "cadre_sources"]);
+  assert.match(JSON.stringify(back.content), /\[1\] The first iPhone was released on June 29, 2007[\s\S]*\[2\] Fetch API error/);
+  assert.doesNotMatch(JSON.stringify(result.messages[at].content), /June 29|Fetch API/);
+  const again = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  assert.equal(JSON.stringify(again.messages), JSON.stringify(result.messages), "the same request each time");
 });
 
 test("a short line that refers to a listed item by number is checked against sources about that item", async () => {
