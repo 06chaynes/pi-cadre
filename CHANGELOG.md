@@ -29,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   only cited URLs.
 - A short answer line that refers to a listed item by number ("- Item 9: 299,792,458 m/s.") was flagged for lacking
   topic words; it is now checked with that item's text. Wrong values on such lines stay flagged.
+- Moving to another branch of a session kept the reasoning mark set on the first branch, so a branch with older steps
+  lost all their reasoning, the step being continued from included; the mark now restarts on a branch move.
 - With descry 1.1, which answers keyword-only while its embedding model loads, cadre's first search ran during that
   load: the expected function was in the symbol list for 5 of 12 navigation questions instead of 12. cadre now waits for
   descry's health report to say the model is loaded (within its 15 s search budget).

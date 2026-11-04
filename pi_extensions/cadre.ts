@@ -438,8 +438,12 @@ export default async function (pi: ExtensionAPI) {
   });
 
   let continued = false;
-  // Steps with a timestamp at or before this lose their reasoning in requests (see withoutEarlierReasoning).
+  // Steps with a timestamp at or before this lose their reasoning in requests (see withoutEarlierReasoning). A new,
+  // resumed or forked session gets a fresh runtime; moving to another branch of this one starts from scratch too.
   let reasoningKeptAfter = 0;
+  pi.on("session_tree", async () => {
+    reasoningKeptAfter = 0;
+  });
   // The project file map for the current prompt (built at its start), or "" when off.
   let map = "";
   // descry's symbols for the current prompt, or "" when descry is not installed or nothing matched.
