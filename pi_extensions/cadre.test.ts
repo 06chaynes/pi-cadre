@@ -710,6 +710,29 @@ test("when clearing runs, reasoning of the steps up to then leaves with the clea
   assert.match(JSON.stringify(session.buildSessionContext().messages), /STEP-ONE reasoning/, "the session itself is unchanged");
 });
 
+test("moving to another branch of the session starts reasoning kept from scratch", async () => {
+  // The mark is a time: after a clearing on one branch, a branch with older steps would lose all their reasoning,
+  // including the step being continued from.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const big = (i: number) => `file ${i} ` + "x".repeat(10_800);
+  const old = realSession([{ role: "user", content: "Fix the bug" }, thinkingCall("o1", "OLD-BRANCH reasoning"), toolResult("o1", "read", "x = 1")]);
+  const { session, ids } = realSession([
+    { role: "user", content: "Add a restock report to the inventory project and test it." },
+    thinkingCall("c0", "STEP-ZERO reasoning"),
+    toolResult("c0", "read", big(0)),
+    thinkingCall("c1", "STEP-ONE reasoning"),
+    toolResult("c1", "read", big(1)),
+    thinkingCall("c2", "STEP-TWO reasoning"),
+    toolResult("c2", "read", big(2)),
+  ]);
+  applyEdits(session, await calls.handlers["turn_end"](boundary(session, { type: "turn_end", toolResultEntryIds: [ids[6]] }), sessionContext([])));
+  await calls.handlers["session_tree"]({ type: "session_tree" }, toolContext(old.session));
+  const result = await calls.handlers["context"]({ type: "context", messages: old.session.buildSessionContext().messages }, toolContext(old.session));
+  assert.match(JSON.stringify(result?.messages ?? old.session.buildSessionContext().messages), /OLD-BRANCH reasoning/);
+});
+
 test("reasoning kept between clearing events is bounded: past its budget, earlier steps' reasoning leaves", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
