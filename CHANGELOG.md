@@ -51,6 +51,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A prompt that names a local path or dotfile (`../../.zshrc`, `~/.ssh/config`, `/etc/hosts`, `.env`) is about local
   files: it was taken for a question about the world, so after the guard blocked the reads and the model said so, the
   research check sent it to search the web for seven minutes. URLs and `.NET` still count as the world.
+- A path-guard block starts with "Blocked:". LFM3 presented the block text as the file's contents ("Here's what's in
+  each file") in 8 of 10 exact replays of a blocked read; with the prefix, in none (Spark answered correctly 10 of 10
+  either way).
 - A tool result cadre inserts (recall after compaction, a source check's passages) has an ID made from its content,
   so the server's prompt cache is reused.
 - `tests/test_launchers.py` runs the launchers of the platform it is on (CI covers Linux, macOS and Windows) with

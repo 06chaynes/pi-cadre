@@ -169,6 +169,9 @@ test("a block says the way forward: project paths, and web_search for informatio
   const reason = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me")!;
   assert.match(reason, /Paths inside the project work: relative paths start at \/work\/inv\./);
   assert.match(reason, /For information from the web, use web_search\./);
+  // LFM3 presented the block text as the file's contents ("Here's what's in each file") in 8 of 10 exact replays;
+  // starting with "Blocked:" it did so in 0 of 10, and Spark answered correctly 10 of 10 either way.
+  assert.match(reason, /^Blocked: bash reaches /);
 });
 
 test("a blocked search for a name lists the project files with that name, without running the command", () => {

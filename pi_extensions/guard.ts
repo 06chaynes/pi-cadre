@@ -124,7 +124,7 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
   if (outside === undefined) return undefined;
   const reason =
-    `${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
+    `Blocked: ${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
     "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
   // A blocked search for a name gets the project's files with that name, found here without running the command.
   const found = toolName === "bash" && typeof input.command === "string" ? projectMatches(cwd, namePatterns(input.command)) : [];
