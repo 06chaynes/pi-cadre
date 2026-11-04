@@ -7,12 +7,39 @@
 
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
 const SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/dev", "/proc", "/sys", "/nix", "/System", "/Library"];
 const MAX_LINKS = 40;
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/**
+ * `path` as Pi's file tools will open it (Pi 1.4's normalizePath, used by read, write, edit, grep, find and ls):
+ * Unicode spaces made plain, a leading "@" dropped, MSYS-style drive paths converted on Windows, "~" expanded, and a
+ * file:// URL turned into its path. The guard must check this, not the path as written: "~/.bashrc" passed as a project
+ * file while Pi wrote the home directory's.
+ */
+function asPiOpens(path: string, home: string): string {
+  let p = path.replace(UNICODE_SPACES, " ");
+  if (p.startsWith("@")) p = p.slice(1);
+  if (process.platform === "win32") {
+    const drive = !p.startsWith("//") && !p.includes("\\") ? p.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i) : null;
+    if (drive) p = `${drive[1].toUpperCase()}:\\${drive[2]?.replaceAll("/", "\\") ?? ""}`;
+  }
+  if (p === "~") return home;
+  if (p.startsWith("~/") || (process.platform === "win32" && p.startsWith("~\\"))) return join(home, p.slice(2));
+  if (/^file:\/\//.test(p)) {
+    try {
+      return fileURLToPath(p);
+    } catch {
+      return "/";
+    }
+  }
+  return p;
+}
 
 /**
  * Resolves `path` against `cwd` the way the operating system does: one component at a time, following each symlink
@@ -76,7 +103,7 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
   if (toolName === "bash" && typeof input.command === "string") {
     paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, home) ?? []);
   } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
-    paths = [input.path];
+    paths = [asPiOpens(input.path, home)];
   }
   const outside = paths
     .map((path) => physicalPath(path, realCwd))

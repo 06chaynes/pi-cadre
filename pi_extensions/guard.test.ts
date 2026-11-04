@@ -53,6 +53,17 @@ test("writes and edits stay inside the project", () => {
   assert.ok(guard("edit", { path: "../other/a.py" }));
 });
 
+test("a path Pi's tools rewrite (~, @, file://) is checked as Pi will use it", () => {
+  // Pi's read, write and edit tools expand ~, strip a leading @ and convert file:// URLs before opening the file; the
+  // guard checked the path as written and let "~/.bashrc" through as a project file.
+  const outside = [`~/.bashrc`, `~`, `@${HOME}/.zshrc`, `@~/.ssh/id_rsa`, `file://${HOME}/.zshrc`, `\u00a0~/.bashrc`.trim(), `~/.ssh/id_rsa`];
+  for (const path of outside) {
+    assert.ok(guardReason("write", { path }, CWD, HOME), `write ${path}`);
+    assert.ok(guardReason("read", { path }, CWD, HOME), `read ${path}`);
+  }
+  for (const path of [`@src/app.py`, `file://${CWD}/src/app.py`, `@${CWD}/notes.md`]) assert.equal(guardReason("write", { path }, CWD, HOME), undefined, path);
+});
+
 test("reads may use system directories but nothing else outside the project", () => {
   assert.equal(guard("read", { path: "/etc/hosts" }), undefined);
   assert.equal(guard("ls", {}), undefined);
