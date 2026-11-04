@@ -30,7 +30,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { guardReason } from "./guard.ts";
+import { BLOCKED, guardReason } from "./guard.ts";
 import { researchQuestion, routeRequest } from "./router.ts";
 import { listedItems, passages, recall, taskQueries } from "./memory.ts";
 import { itemFor, keepBest, rerankScores } from "./rerank.ts";
@@ -666,6 +666,15 @@ export default async function (pi: ExtensionAPI) {
     const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
     const run = branch.slice(branch.findLastIndex((m) => m.role === "user") + 1);
     if (run.some((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))) return undefined;
+    // The user named a path outside the project and the guard blocked a call on it: the answer is about that file,
+    // not the world (asked for web sources, Spark searched about sandboxes for seven minutes).
+    const calls = new Map(run.flatMap((m) => (m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => [b.id, b]) : [])));
+    const named = (call: any) => {
+      const args = call?.arguments ?? {};
+      const words = typeof args.path === "string" ? [args.path] : String(args.command ?? "").split(/[\s;|&()<>'"`=]+/);
+      return words.some((w: string) => w.length >= 3 && /[/~.]/.test(w) && lastPrompt.includes(w));
+    };
+    if (run.some((m) => m.role === "toolResult" && m.isError && textOf(m).startsWith(BLOCKED) && named(calls.get(m.toolCallId)))) return undefined;
     return `Research check: this answer was given without any source. Look it up with ${remote.join(", ")}, then answer from what the sources say.`;
   };
 

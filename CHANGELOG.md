@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   characters), a blocked search's file-name suggestions (a wildcard pattern took 132 s), trailing punctuation after a
   URL (80,000 dots took 10 s), the path pattern of the source check (a 200,000-letter word took 63 s), relative link
   targets on fetched pages (24 s), the closing punctuation of a listed item (18 s), and the file-name pattern that
-  classifies a prompt (hyphen-joined words in a pasted prompt, 250 s).
+  classifies a prompt (200,000 characters of hyphen- or dot-joined words in a pasted prompt took up to 250 s).
 
 ### Changed
 
@@ -49,10 +49,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and in dual mode a quoted `&` or `)` broke the command.
 - A file deep in the tree (a relative path over 200 characters, with / or \\) stays in the project map and descry's
   symbols.
-- A prompt that names a local path or dotfile (`../../.zshrc`, `~/.ssh/config`, `/etc/hosts`, `.env`) is about local
-  files: it was taken for a question about the world, so after the guard blocked the reads and the model said so, the
-  research check sent it to search the web for seven minutes. URLs, web domains (`.io`, `.com`), subreddits
-  (`/r/...`), one-part tags (`/s`) and `.NET` still count as the world.
+- The research check stays quiet when the guard blocked a call on a path the prompt names ("Show me what is in
+  ../../.zshrc"): after the guard blocked the reads and the model said so, the check asked for web sources and Spark
+  searched about sandboxes for seven minutes. Decided from the session, not from the prompt's wording.
 - A path-guard block starts with "Blocked:". LFM3 presented the block text as the file's contents ("Here's what's in
   each file") in 8 of 10 exact replays of a blocked read; with the prefix, in none (Spark answered correctly 10 of 10
   either way).

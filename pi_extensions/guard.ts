@@ -15,6 +15,8 @@ const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
 const SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/dev", "/proc", "/sys", "/nix", "/System", "/Library"];
 const MAX_LINKS = 40;
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+/** How a block's reason starts: LFM3 presented an unmarked block as the file's contents. */
+export const BLOCKED = "Blocked: ";
 
 /**
  * `path` as Pi's file tools will open it (Pi 1.4's normalizePath, used by read, write, edit, grep, find and ls):
@@ -124,7 +126,7 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
   if (outside === undefined) return undefined;
   const reason =
-    `Blocked: ${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
+    `${BLOCKED}${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
     "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
   // A blocked search for a name gets the project's files with that name, found here without running the command.
   const found = toolName === "bash" && typeof input.command === "string" ? projectMatches(cwd, namePatterns(input.command)) : [];

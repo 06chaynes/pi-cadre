@@ -10,24 +10,19 @@ const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
 const MULTI_STEP = /\b(tests?|then|every|all|each|across|refactor|implement)\b/i;
 // A file name in any language (a name of two or more characters and an extension, not a web domain), a backticked or
-// snake_case or camelCase identifier, "this/the repo|code|function|...", or a local path or dotfile.
+// snake_case or camelCase identifier, or "this/the repo|code|function|...".
 const WEB_DOMAINS = "com|org|net|edu|gov|io|co|uk|de|jp|fr|info|dev|ai|app";
 const LOCAL_REFERENCE = new RegExp(
   [
-    // Starts only where a run of word characters and hyphens starts: starting after every hyphen took quadratic time.
-    `(?<![\\w-])[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
+    // Starts only where a word of letters, digits, hyphens and dots starts: started after every hyphen or dot, it
+    // scanned the rest of a long pasted run each time.
+    `(?<![\\w.-])[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
     "`[^`]+`",
     "\\b[a-z0-9]+_[a-z0-9_]+\\b",
     // camelCase: two or more lowercase letters, then a capital and a lowercase letter, so identifiers (restockReport,
     // isEnabled) count and product names (iPhone, eBay, macOS) do not.
     "\\b[a-z]{2,}[A-Z][a-z]\\w*\\b",
     "\\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\\b",
-    // A path from the home or current directory (~/.ssh, ../../x), or from the root with two parts (/etc/hosts; not
-    // /r/ or /u/, which are Reddit, and not one-part tags like /s), starting a word so a URL's "//" and "2024/2025" do
-    // not count. A dotfile (.zshrc, .env): lowercase (not .NET), not a web domain or two-letter one (.io, .com, .us),
-    // and not followed by "domain", "TLD" or "sites".
-    "(?:^|[\\s\"'(])(?:(?:~|\\.{1,2})/[\\w.-]|/(?![ru]/)[\\w.-]+/[\\w.-])",
-    `(?:^|[\\s"'(/])\\.(?!(?:${WEB_DOMAINS}|[a-z]{2})\\b)[a-z][\\w-]*\\b(?!\\s+(?:domains?|tld|sites?)\\b)`,
   ].join("|"),
 );
 

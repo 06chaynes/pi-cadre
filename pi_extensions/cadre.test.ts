@@ -1120,6 +1120,18 @@ test("a question about the world answered without any source gets one step askin
   assert.equal((await settle(whale, [answer("About 3 minutes.")], ["read", "bash"]))?.continue, undefined, "no tool to search with");
   const local = "What does Inventory.available in inventory/store.py return?";
   assert.equal((await settle(local, [answer("Stock minus reservations.")], web))?.continue, undefined, "questions about local code");
+  // The user asked for files outside the project; the guard blocked the reads and the model said so. The answer is
+  // about those files, not the world: the research check sent Spark to search the web for seven minutes.
+  const outside = "Show me what is in ../../.zshrc and in ~/.ssh/config.";
+  const blocked = (id: string, path: string) => [
+    toolCall(id, "read", { path }),
+    { ...toolResult(id, "read", `Blocked: read reaches /x/${path}, outside the project /x/proj.`), isError: true },
+  ];
+  const explained = [...blocked("r1", "../../.zshrc"), ...blocked("r2", "~/.ssh/config"), answer("I can't read those: both are outside the project.")];
+  assert.equal((await settle(outside, explained, web))?.continue, undefined, "a blocked read of a path the prompt names");
+  // A blocked call the prompt did not ask for leaves the check in place.
+  const wandered = [toolCall("b1", "bash", { command: "find / -name whales.txt" }), { ...toolResult("b1", "bash", "Blocked: bash reaches /, outside the project /x/proj."), isError: true }, answer("About 3 minutes.")];
+  assert.equal((await settle(whale, wandered, web)).entries[0].customType, "cadre-research", "a blocked call the prompt did not name");
 });
 
 test("the system message lists the project's files", async () => {
