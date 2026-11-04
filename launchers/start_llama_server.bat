@@ -2,10 +2,16 @@
 REM Starts llama-server using cadre_config.env (see that file for MODEL values). Flags override the config;
 REM arguments after -- go to llama-server.
 setlocal
-REM shift also moves %0, so the script's own path is kept before the flags are read.
+REM shift also moves %0, so the script's path and name are kept before the flags are read.
 set "SELF=%~f0"
 set "SELF_NAME=%~nx0"
-set "EXTRA_ARGS="
+REM The arguments as written: what follows " -- " goes to llama-server unchanged. Taking them one at a time (%1, %2)
+REM would split values at = , and ; and re-quote them. The space at each end lets a first or last "--" match " -- ".
+set "SPACE= "
+set ALL= %*%SPACE%
+REM A dual-mode server window receives the arguments after -- from the script that started it, in the environment.
+if not defined CADRE_DUAL_EXTRA set "EXTRA_ARGS="
+set "CADRE_DUAL_EXTRA="
 set "PROJECT_DIR=%~dp0.."
 if exist "%PROJECT_DIR%\cadre_config.env" (
     for /f "usebackq eol=# tokens=1,* delims==" %%G in ("%PROJECT_DIR%\cadre_config.env") do set "%%G=%%H"
@@ -37,10 +43,8 @@ shift
 goto args
 
 :extra
-shift
-if "%~1"=="" goto run
-set EXTRA_ARGS=%EXTRA_ARGS% %1
-goto extra
+set EXTRA_ARGS=%ALL:* -- = %
+goto run
 
 :help
 call :usage
@@ -57,11 +61,7 @@ where llama-server >nul 2>nul || (
 )
 if not defined MODEL set MODEL=dual
 
-if /i "%MODEL%"=="dual" (
-    start "Spark-X2.6-4B" cmd /k ""%SELF%" -m spark -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%" --%EXTRA_ARGS%"
-    start "LFM3-1.7B" cmd /k ""%SELF%" -m lfm3 -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%" --%EXTRA_ARGS%"
-    exit /b 0
-)
+if /i "%MODEL%"=="dual" goto dual
 
 set "DEFAULTS=8080 32768 8"
 set "ID=%MODEL%"
@@ -70,7 +70,7 @@ if /i "%MODEL%"=="reranker" (
     set "DEFAULTS=8082 8192 1"
     set "ID=ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
     if defined RERANKER_MODEL set "ID=%RERANKER_MODEL%"
-    set "MODE_ARGS=--embedding --pooling rank --reranking -ub 8192 -b 8192"
+    set "MODE_ARGS= --embedding --pooling rank --reranking -ub 8192 -b 8192"
 )
 if /i "%MODEL%"=="lfm3" (
     set "DEFAULTS=8081 65536 4"
@@ -92,4 +92,13 @@ for /f "tokens=1-3" %%a in ("%DEFAULTS%") do (
 if not defined HOST set HOST=127.0.0.1
 if not defined N_GPU_LAYERS set N_GPU_LAYERS=99
 
-llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja %MODE_ARGS%%EXTRA_ARGS%
+llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja%MODE_ARGS%%EXTRA_ARGS%
+exit /b
+
+REM Dual mode starts each server in its own window, at its own defaults (port, context, slots), with -ngl and the
+REM arguments after --. "call" keeps the script's path quoted for the window's cmd.
+:dual
+set "CADRE_DUAL_EXTRA=1"
+start "Spark-X2.6-4B" cmd /k call "%SELF%" -m spark -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%"
+start "LFM3-1.7B" cmd /k call "%SELF%" -m lfm3 -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%"
+exit /b 0

@@ -3,6 +3,7 @@ that record their arguments, so both scripts are held to the same expected calls
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -58,7 +59,10 @@ def run(project, script, *args, calls=1):
     env = {k: v for k, v in os.environ.items() if k.upper() != "PATH"}
     env.update(PATH=str(project / "bin") + os.pathsep + os.environ["PATH"], STUB_LOG=str(log))
     path = project / "launchers" / f"{script}{EXT}"
-    command = ["cmd", "/c", str(path), *args] if WINDOWS else [str(path), *args]
+    # On Windows the command line is written as a user types it in cmd: an argument with cmd's special characters in
+    # double quotes (Python quotes only arguments with spaces), the whole line wrapped for /s /c.
+    typed = " ".join(f'"{a}"' if re.search(r"[&|<>^()]", a) and '"' not in a else subprocess.list2cmdline([a]) for a in args)
+    command = f'cmd /s /c ""{path}" {typed}"' if WINDOWS else [str(path), *args]
     # Output goes to a file: on Windows, dual mode's server windows inherit the handles and stay open.
     with open(project / "out.txt", "w+") as out:
         code = subprocess.run(command, env=env, stdout=out, stderr=subprocess.STDOUT, timeout=60).returncode
@@ -90,6 +94,16 @@ def test_server_flags_and_passthrough(project):
     for flag, value in (("--port", "9000"), ("--ctx-size", "4096"), ("--parallel", "2"), ("-ngl", "10")):
         expected[expected.index(flag) + 1] = value
     assert calls == [["llama-server", *expected, "--device", "CUDA0"]]
+
+
+def test_server_passes_arguments_after_double_dash_unchanged(project):
+    """Values with =, commas, spaces, parentheses and & reach llama-server as one argument each, in both modes."""
+    extra = ["--override-kv", "tokenizer.add_bos=bool:false", "--chat-template-kwargs", '{"a":1,"b":2}', "--alias", "Spark (Q4)", "--api-key", "p&ss;x"]
+    assert run(project, "start_llama_server", "-m", "spark", "--", *extra)[2] == [["llama-server", *SPARK, *extra]]
+    for p in (project / "calls").glob("*.json"):
+        p.unlink()
+    calls = run(project, "start_llama_server", "-m", "dual", "--", *extra, calls=2)[2]
+    assert calls == sorted([["llama-server", *LFM3, *extra], ["llama-server", *SPARK, *extra]])
 
 
 def test_server_local_gguf_in_any_case(project):
