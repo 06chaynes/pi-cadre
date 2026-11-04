@@ -757,9 +757,9 @@ export default async function (pi: ExtensionAPI) {
         .filter((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))
         .flatMap((m) =>
           urls(argsOf.get(m.toolCallId) ?? "").flatMap((page) => {
-            // A target stops at "(" as well as ")": scanning past "(" to the end of a page took time growing with the
-            // square of its length.
-            const linked = [...textOf(m).matchAll(/\]\((\/[^()\s]*)\)/g)].flatMap((l) => {
+            // A target stops at "]" as well as ")": each match starts at "](", so a scan ends at the next possible start
+            // (scanning to the end of a page from every "](/" took time growing with the square of its length).
+            const linked = [...textOf(m).matchAll(/\]\((\/[^)\s\]]*)\)/g)].flatMap((l) => {
               try {
                 return [new URL(l[1], page).href];
               } catch {

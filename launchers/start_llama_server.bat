@@ -46,7 +46,8 @@ set EXTRA_ARGS=%ALL:* -- = %
 goto run
 
 REM A dual-mode server window: the arguments after -- come from the script that started it, in CADRE_EXTRA_ARGS. Only
-REM this argument reads it, so a command typed later in the window, or the user's environment, never does.
+REM this argument reads it, so a command typed later in the window, or the user's environment, never does. It is
+REM internal to dual mode on Windows (the .sh passes the arguments directly) and not part of the usage.
 :fromdual
 set EXTRA_ARGS=%CADRE_EXTRA_ARGS%
 shift

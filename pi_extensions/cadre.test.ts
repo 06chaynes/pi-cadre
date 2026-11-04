@@ -1362,6 +1362,16 @@ test("the source check reads a fetched page full of unclosed link targets in lin
   const started = Date.now();
   await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
   assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+  // A relative link with parentheses in it, as Wikipedia writes them, still supports the URL it resolves to.
+  const linked = realSession([
+    { role: "user", content: "Which element is liquid at room temperature besides bromine? Give a source." },
+    toolCall("f2", "fetch_content", { url: "https://en.wikipedia.org/wiki/Liquid" }),
+    toolResult("f2", "fetch_content", "Besides bromine, [Mercury](/wiki/Mercury_(element)) is liquid at room temperature."),
+    answer("Mercury, see https://en.wikipedia.org/wiki/Mercury_(element)"),
+  ]).session;
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt: "Which element is liquid at room temperature besides bromine? Give a source." }, uiContext(true).ctx);
+  const settled = await calls.handlers["agent_before_settle"](boundary(linked), { ...sessionContext([]), sessionManager: linked });
+  assert.doesNotMatch(JSON.stringify(settled?.entries ?? []), /Mercury_/);
 });
 
 test("an answer line that refers to a long listed item is read in linear time", async () => {
