@@ -141,7 +141,9 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
 export function unsupportedClaims(answer: string, sources: readonly Source[], evidence: readonly string[] = sources.map(textOfSource), urls: readonly string[] = []): Unsupported[] {
   const texts = sources.map(textOfSource);
   const sourceUrls = new Set([...texts.flatMap((s) => s.match(URL) ?? []), ...urls].map(normUrl));
-  const sourceText = normText(texts.join("\n").replace(MARKDOWN_LINK, "$1"));
+  // A quote matches the sources as written, or as a reader sees them with links reduced to their text.
+  const joined = texts.join("\n");
+  const sourceTexts = [normText(joined), normText(joined.replace(MARKDOWN_LINK, "$1"))];
   const numbers = sources.flatMap((src) => {
     const s = textOfSource(src);
     const guessed = new Set(typeof src === "string" ? [] : src.guessed.map(normNumber));
@@ -150,7 +152,10 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
   const circular = new Set<Claim>();
   const supported = (claim: Claim, rest: string) => {
     if (claim.kind === "url") return sourceUrls.has(normUrl(claim.value));
-    if (claim.kind === "quote") return sourceText.includes(normText(claim.value).split(" ").slice(0, QUOTE_WORDS).join(" "));
+    if (claim.kind === "quote") {
+      const opening = normText(claim.value).split(" ").slice(0, QUOTE_WORDS).join(" ");
+      return sourceTexts.some((text) => text.includes(opening));
+    }
     const scaled = SCALE.test(rest);
     const words = new Set(terms(claim.context).filter((t) => !/^\d+$/.test(t)));
     const found = numbers.filter(({ value }) => sameNumber(claim.value, value, scaled));

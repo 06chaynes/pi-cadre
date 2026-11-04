@@ -146,6 +146,9 @@ test("a quotation matches a source that writes its words as Markdown links", () 
   const answer = 'Wikipedia states: "Kenyan athlete Ruth Chepng\'etich broke the women\'s world record with a time of 2:09:56 on October 13, 2024."';
   assert.deepEqual(unsupportedClaims(answer, [page]).map((u) => u.claim.value), []);
   assert.equal(unsupportedClaims('It says "Kenyan athlete Ruth Chepngetich ran the race in record time on a cold day."', [page]).length, 1, "a misquote is still named");
+  // A quote that holds link-like text itself still matches the source as written (found in review).
+  const code = "function run() {\n  return handlers[name](event) || fallback(event, options, context);\n}";
+  assert.deepEqual(unsupportedClaims('The file says "return handlers[name](event) || fallback(event, options, context)".', [code]), []);
   const started = Date.now();
   unsupportedClaims('"one two three four five six seven eight"', [`${"[a](".repeat(60_000)} ${"[".repeat(60_000)} ${"](x".repeat(60_000)}`]);
   assert.ok(Date.now() - started < 1500, `${Date.now() - started} ms`);
