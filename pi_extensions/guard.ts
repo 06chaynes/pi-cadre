@@ -5,7 +5,7 @@
  * written in them, so the guard catches mistakes rather than enforcing a sandbox.
  */
 
-import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,13 +42,15 @@ function asPiOpens(path: string, home: string): string {
 }
 
 /**
- * `path` and the other spellings Pi's read opens when it is missing (Pi 1.4's resolveReadPath): " AM."/" PM." with a
- * narrow no-break space, the NFD form, "'" as U+2019, and NFD with U+2019. Each is checked, since any may be opened.
+ * The path Pi's read opens for `path` (Pi 1.4's resolveReadPath): `path` itself when it exists, else the first other
+ * spelling that exists, in Pi's order (" AM."/" PM." with a narrow no-break space, NFD, "'" as U+2019, NFD with
+ * U+2019), else `path`. Checking a spelling that does not exist would test the wrong file.
  */
-function readSpellings(path: string): string[] {
+function readOpens(path: string): string {
+  if (existsSync(path)) return path;
   const curly = (p: string) => p.replace(/'/g, "\u2019");
   const nfd = path.normalize("NFD");
-  return [...new Set([path, path.replace(/ (AM|PM)\./gi, "\u202f$1."), nfd, curly(path), curly(nfd)])];
+  return [path.replace(/ (AM|PM)\./gi, "\u202f$1."), nfd, curly(path), curly(nfd)].find((p) => p !== path && existsSync(p)) ?? path;
 }
 
 /**
@@ -115,7 +117,7 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
   } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
     // Pi resolves a file tool's path against the working directory, applying ".." before any link is followed.
     const opened = resolve(cwd, asPiOpens(input.path, home));
-    paths = toolName === "read" ? readSpellings(opened) : [opened];
+    paths = [toolName === "read" ? readOpens(opened) : opened];
   }
   const outside = paths
     .map((path) => physicalPath(path, realCwd))

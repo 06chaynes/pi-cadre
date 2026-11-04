@@ -127,10 +127,11 @@ test("a file tool's '..' applies before symlinks, as Pi resolves the path before
   assert.equal(guardReason("write", { path: "linked/../inside.py" }, cwd, base), undefined);
 });
 
-test("a read checks every other spelling Pi tries when the path is missing", () => {
+test("a read is checked under the other spelling Pi opens when the path is missing", () => {
   // Pi's read falls back to the path with ' as \u2019, " AM."/" PM." with a narrow no-break space, and NFD: a link
   // named x\u2019y in the project made read "x'y/..." open the link's target outside the project.
   const { base, cwd } = tempTree();
+  writeFileSync(join(base, "Other", "secret"), "");
   symlinkSync(join(base, "Other"), join(cwd, "x\u2019y"));
   symlinkSync(join(base, "Other"), join(cwd, "Shot 1.02\u202fPM.dir"));
   symlinkSync(join(base, "Other"), join(cwd, "cafe\u0301"));
@@ -138,6 +139,19 @@ test("a read checks every other spelling Pi tries when the path is missing", () 
   assert.ok(guardReason("read", { path: "Shot 1.02 PM.dir/secret" }, cwd, base));
   assert.ok(guardReason("read", { path: "caf\u00e9/secret" }, cwd, base));
   assert.equal(guardReason("read", { path: "sub/it's 1 PM.txt" }, cwd, base), undefined);
+});
+
+test("a project under a directory with ' or ' AM.' in its name can still be read", () => {
+  // Pi tries the other spellings only when the path is missing, and opens the first that exists; checking spellings
+  // that do not exist blocked every read in such a project.
+  for (const name of ["o'brien", "shot 9 AM.", "jos\u00e9"]) {
+    const base = mkdtempSync(join(tmpdir(), "cadre-Base-"));
+    const cwd = join(base, name, "proj");
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(cwd, "a.txt"), "");
+    assert.equal(guardReason("read", { path: "a.txt" }, cwd, base), undefined, name);
+    assert.equal(guardReason("read", { path: "missing.txt" }, cwd, base), undefined, name);
+  }
 });
 
 test("compares paths in on-disk case on case-insensitive file systems", (t) => {
