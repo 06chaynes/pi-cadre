@@ -138,3 +138,15 @@ test("reading an answer with a very long word takes linear time", () => {
   claimsOf(`The value is 42 ${"a".repeat(200_000)} and see src/app/main.py for it.`);
   assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
 });
+
+test("a quotation matches a source that writes its words as Markdown links", () => {
+  // The hands-on run: the model quoted Wikipedia word for word, but the fetched page wrote "[Ruth Chepng'etich](url
+  // "title")", so the check named a correct quote and the model spent four minutes re-verifying it.
+  const page = "Kenyan athlete [Ruth Chepng'etich](https://en.wikipedia.org/wiki/Ruth_Chepng'etich \"Ruth Chepng'etich\") broke the women's world record with a time of 2:09:56 on October 13, 2024, at the [2024 Chicago Marathon](https://en.wikipedia.org/wiki/2024_Chicago_Marathon), and [Mercury](/wiki/Mercury_(element)) too.";
+  const answer = 'Wikipedia states: "Kenyan athlete Ruth Chepng\'etich broke the women\'s world record with a time of 2:09:56 on October 13, 2024."';
+  assert.deepEqual(unsupportedClaims(answer, [page]).map((u) => u.claim.value), []);
+  assert.equal(unsupportedClaims('It says "Kenyan athlete Ruth Chepngetich ran the race in record time on a cold day."', [page]).length, 1, "a misquote is still named");
+  const started = Date.now();
+  unsupportedClaims('"one two three four five six seven eight"', [`${"[a](".repeat(60_000)} ${"[".repeat(60_000)} ${"](x".repeat(60_000)}`]);
+  assert.ok(Date.now() - started < 1500, `${Date.now() - started} ms`);
+});

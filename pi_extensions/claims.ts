@@ -70,6 +70,10 @@ const normUrl = (url: string) =>
     .replace(/\.m\.wikipedia\./i, ".wikipedia.")
     .replace(/\/$/, "")
     .toLowerCase();
+// A Markdown link or image as fetched pages write them, [text](url "title"), reduced to its text for quote matching: a
+// quote of the page's words did not match its source. The target allows one level of parentheses (/wiki/A_(b)); no
+// part can scan past a "[" or "(" it did not open, so the pattern is linear on a page.
+const MARKDOWN_LINK = /!?\[([^\[\]\n]*)\]\([^()\s[\]]*(?:\([^()\s[\]]*\)[^()\s[\]]*)*(?:\s+"[^"\n]*")?\)/g;
 const normNumber = (n: string) => n.replace(/[,\u2009\u202f ]/g, "");
 // Line comment and quote markers at line starts (///, //, #, *, --, ;, >) are dropped, so a quoted doc comment or
 // quoted block that spans lines matches its source.
@@ -137,7 +141,7 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
 export function unsupportedClaims(answer: string, sources: readonly Source[], evidence: readonly string[] = sources.map(textOfSource), urls: readonly string[] = []): Unsupported[] {
   const texts = sources.map(textOfSource);
   const sourceUrls = new Set([...texts.flatMap((s) => s.match(URL) ?? []), ...urls].map(normUrl));
-  const sourceText = normText(texts.join("\n"));
+  const sourceText = normText(texts.join("\n").replace(MARKDOWN_LINK, "$1"));
   const numbers = sources.flatMap((src) => {
     const s = textOfSource(src);
     const guessed = new Set(typeof src === "string" ? [] : src.guessed.map(normNumber));

@@ -52,6 +52,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The research check stays quiet when the guard blocked a call on a path the prompt names ("Show me what is in
   ../../.zshrc"): after the guard blocked the reads and the model said so, the check asked for web sources and Spark
   searched about sandboxes for seven minutes. Decided from the session, not from the prompt's wording.
+- A quotation of a fetched page matches it when the page writes the quoted words as Markdown links ("[Ruth
+  Chepng'etich](url)"): the source check named correct Wikipedia quotes, and the model spent minutes re-verifying them.
+  Over 227 saved answers this removes two quote flags (both such cases) and adds none.
 - A path-guard block starts with "Blocked:". LFM3 presented the block text as the file's contents ("Here's what's in
   each file") in 8 of 10 exact replays of a blocked read; with the prefix, in none (Spark answered correctly 10 of 10
   either way).
