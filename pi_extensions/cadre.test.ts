@@ -1068,12 +1068,12 @@ test("with descry installed, the session starts descry's MCP server with no sett
   writeFileSync(
     bin,
     `#!/usr/bin/env node
+require("node:fs").writeFileSync("${dir}/pid", String(process.pid));
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
   require("node:fs").appendFileSync("${dir}/calls.log", (msg.params?.name ?? msg.method) + "\\n");
   if (msg.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { structuredContent: { results: [${JSON.stringify(result)}] } } }) + "\\n");
 });
-process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.log", "stopped\\n"); process.exit(0); });
 `,
   );
   chmodSync(bin, 0o755);
@@ -1090,9 +1090,20 @@ process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.lo
     await hooks.handlers["context_with_system"]({ messages: [system] });
     assert.match(system.content, /Code symbols matching the request \(from descry\):\nresolve_redirects requests\/sessions\.py:159/);
     assert.match(calls(), /^initialize\nnotifications\/initialized\ndescry_ensure\ndescry_health\ndescry_search$/m);
+    // Shutdown stops the server however it exits (end of input or the signal): its process is gone.
+    const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    assert.ok(alive(), "the server runs before shutdown");
     await hooks.handlers["session_shutdown"]({}, ctx);
-    for (let i = 0; i < 50 && !calls().includes("stopped"); i++) await new Promise((r) => setTimeout(r, 20));
-    assert.match(calls(), /stopped/);
+    for (let i = 0; i < 250 && alive(); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.ok(!alive(), "the server stopped");
   } finally {
     // A failed assertion must not leave the server running, or the test file never exits.
     await hooks.handlers["session_shutdown"]({}, ctx);
