@@ -9,9 +9,7 @@ REM The arguments as written: what follows " -- " goes to llama-server unchanged
 REM would split values at = , and ; and re-quote them. The space at each end lets a first or last "--" match " -- ".
 set "SPACE= "
 set ALL= %*%SPACE%
-REM A dual-mode server window receives the arguments after -- from the script that started it, in the environment.
-if not defined CADRE_DUAL_EXTRA set "EXTRA_ARGS="
-set "CADRE_DUAL_EXTRA="
+set "EXTRA_ARGS="
 set "PROJECT_DIR=%~dp0.."
 if exist "%PROJECT_DIR%\cadre_config.env" (
     for /f "usebackq eol=# tokens=1,* delims==" %%G in ("%PROJECT_DIR%\cadre_config.env") do set "%%G=%%H"
@@ -20,6 +18,7 @@ if exist "%PROJECT_DIR%\cadre_config.env" (
 :args
 if "%~1"=="" goto run
 if "%~1"=="--" goto extra
+if "%~1"=="--from-dual" goto fromdual
 if "%~1"=="-h" goto help
 if "%~1"=="--help" goto help
 set "FLAG="
@@ -45,6 +44,13 @@ goto args
 :extra
 set EXTRA_ARGS=%ALL:* -- = %
 goto run
+
+REM A dual-mode server window: the arguments after -- come from the script that started it, in CADRE_EXTRA_ARGS. Only
+REM this argument reads it, so a command typed later in the window, or the user's environment, never does.
+:fromdual
+set EXTRA_ARGS=%CADRE_EXTRA_ARGS%
+shift
+goto args
 
 :help
 call :usage
@@ -98,7 +104,7 @@ exit /b
 REM Dual mode starts each server in its own window, at its own defaults (port, context, slots), with -ngl and the
 REM arguments after --. "call" keeps the script's path quoted for the window's cmd.
 :dual
-set "CADRE_DUAL_EXTRA=1"
-start "Spark-X2.6-4B" cmd /k call "%SELF%" -m spark -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%"
-start "LFM3-1.7B" cmd /k call "%SELF%" -m lfm3 -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%"
+set CADRE_EXTRA_ARGS=%EXTRA_ARGS%
+start "Spark-X2.6-4B" cmd /k call "%SELF%" --from-dual -m spark -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%"
+start "LFM3-1.7B" cmd /k call "%SELF%" --from-dual -m lfm3 -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%"
 exit /b 0
