@@ -43,6 +43,9 @@ const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|(?<![\w.-])[\w.-]+(?:\/[\w.@%+-
 const RANGE = "\\d+(?:\\s*[-–]\\s*\\d+)?";
 const LINE_REF = new RegExp(`\\blines?\\s+${RANGE}(?:\\s*(?:,|and)\\s*${RANGE})*|(?<=\\.\\w{1,5}):${RANGE}`, "gi");
 const QUOTE = /["“]([^"”\n]{12,300})["”]/g;
+// A Markdown heading's section number ("### 1.2 Periodic re-sync"): the write-up's own structure, as are its references
+// to that section elsewhere ("see §1.2", "section 1.2").
+const SECTION_NUMBER = /^ {0,3}#{1,6}[ \t]+(\d+(?:\.\d+)+)\.?(?=[ \t])/gm;
 const SCALE = /^\s*(thousand|million|billion|trillion|[kMB]\b)/;
 const UNIT_SIGN = /^\s?(%|°)/;
 // Fewer words than this near a source number (a passage in another script) and the number alone counts.
@@ -106,8 +109,10 @@ export function claimsOf(text: string): Claim[] {
   };
   const prose = blank(text, CODE);
   const plain = blank(blank(blank(prose, URL), PATH), LINE_REF);
+  const sections = new Set([...prose.matchAll(SECTION_NUMBER)].map((m) => m[1]));
   for (const m of plain.matchAll(ANSWER_NUMBER)) {
     const n = normNumber(m[0]);
+    if (sections.has(n)) continue;
     const after = plain.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
     if (significant(n).length >= 3 || n.includes(".") || UNIT_SIGN.test(after)) add("number", n, m.index!);
   }

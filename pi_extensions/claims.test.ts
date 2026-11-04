@@ -59,6 +59,15 @@ test("line numbers that point into files are positions in the code, not claims",
   assert.deepEqual(values("An airline 747 carries 416 passengers on a file.py-free route."), ["number:747", "number:416"]);
 });
 
+test("a write-up's own section numbers, in its headings and where it refers to them, are not claims", () => {
+  // A live note named "1.1", "2.2" ... "3.2" of a write-up's headings and cross-references, six of six slots, so the
+  // values it should have checked went unnamed.
+  const doc = "### 1.1 Login-time application\nRoles apply at login.\n\n### 2.2 No membership\nA user with \"no membership\" (see §2.2) keeps 3.5 roles; section 1.1 explains it.\n## 3 Removal\nThe 2.5% case.";
+  assert.deepEqual(values(doc), ["number:3.5", "number:2.5"]);
+  // A number in a heading's text, not its section number, is still a claim.
+  assert.deepEqual(values("## Results for 2024\nThe 1.1 release shipped."), ["number:2024", "number:1.1"]);
+});
+
 test("an answer may group digits with plain spaces", () => {
   assert.deepEqual(values("Light travels at 299 792 458 m/s, in 2024 12 labs agree."), ["number:299792458", "number:2024"]);
 });
