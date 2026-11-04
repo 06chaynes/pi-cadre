@@ -46,7 +46,7 @@ const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|(?<![\w.-])[\w.-]+(?:\/[\w.@%+-
 // Line numbers into files ("line 190", "lines 183-188 and 202", "sessions.py:159-210") are positions in the code, which
 // read results do not print, so like paths they are not claims about sources.
 const RANGE = "\\d+(?:\\s*[-–]\\s*\\d+)?";
-// A line number may be approximate ("line ~647"); "lines near 450" in prose is not one.
+// A line number may be approximate ("line ~647").
 const APPROX = "(?:~\\s*)?";
 const LINE_REF = new RegExp(`\\blines?\\s+${APPROX}${RANGE}(?:\\s*(?:,|and)\\s*${APPROX}${RANGE})*|(?<=\\.\\w{1,5}):${RANGE}`, "gi");
 const QUOTE = /["“]([^"”\n]{12,300})["”]/g;
@@ -54,7 +54,7 @@ const QUOTE = /["“]([^"”\n]{12,300})["”]/g;
 // 1.2"): the write-up's own structure. The same number elsewhere (a table cell) is still a claim.
 const SECTION_NUMBER = /^ {0,3}#{1,6}[ \t]+\d+(?:\.\d+)+\.?(?=[ \t])|§\s*\d+(?:\.\d+)*|\bsections?\s+\d+(?:\.\d+)+/gim;
 const SCALE = /^\s*(thousand|million|billion|trillion|[kMB]\b)/;
-// A source number's scale is read from words only: a bare B or M after it is as often bytes or molar.
+// A source number's scale is read from words only (a bare B or M is as often a unit).
 const SCALE_FACTOR: Record<string, number> = { thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12 };
 const UNIT_SIGN = /^\s?(%|°)/;
 // Fewer words than this near a source number (a passage in another script) and the number alone counts.
@@ -119,7 +119,7 @@ export function claimsOf(text: string): Claim[] {
     out.push({ kind, value, context: contextAt(text, index) });
   };
   const prose = blank(text, CODE);
-  // Line references go before paths: blanking "src/auth.rs" first hid the ".rs" that marks ":1638" as a line.
+  // Line references first: they need the file name before them (auth.rs:1638), which path blanking removes.
   const plain = blank(blank(blank(blank(prose, URL), SECTION_NUMBER), LINE_REF), PATH);
   for (const m of plain.matchAll(ANSWER_NUMBER)) {
     const n = normNumber(m[0]);
@@ -141,7 +141,6 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
   if (!n.includes(".") && n.length >= 6 && s.length > n.length && s.length - n.length <= 2 && s.endsWith(n)) return true;
   // A claim with fewer decimals than its source, rounded from it (71 from 71.2, 3.14 from 3.14159).
   const decimals = (x: string) => x.split(".")[1]?.length ?? 0;
-  // Two significant digits at least: a one-digit value (3%) would round from almost any decimal on a page (2.6%).
   if (significant(n).length >= 2 && decimals(n) < decimals(s) && Number(s).toFixed(decimals(n)) === n) return true;
   // A rounded claim: the source is more precise (has decimals) or the claim names a scale (14.2 million).
   if (!s.includes(".") && !scaled) return false;

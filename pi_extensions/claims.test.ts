@@ -67,8 +67,6 @@ test("line numbers that point into files are positions in the code, not claims",
 });
 
 test("a write-up's own section numbers, in its headings and where it refers to them, are not claims", () => {
-  // A live note named "1.1", "2.2" ... "3.2" of a write-up's headings and cross-references, six of six slots, so the
-  // values it should have checked went unnamed.
   const doc = "### 1.1 Login-time application\nRoles apply at login.\n\n### 2.2 No membership\nA user with \"no membership\" (see §2.2) keeps 3.5 roles; section 1.1 explains it.\n## 3 Removal\nThe 2.5% case.";
   assert.deepEqual(values(doc), ["number:3.5", "number:2.5"]);
   // A number in a heading's text, not its section number, is still a claim.

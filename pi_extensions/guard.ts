@@ -132,7 +132,6 @@ export function guardReason(
     .map((path) => physicalPath(path, realCwd))
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
   if (outside === undefined) return undefined;
-  // Only tools that are active are named: a fixed "use web_search" sent the model to a tool that may not exist.
   const elsewhere = otherTools.length ? `For information from outside the project, use ${otherTools.join(", ")}. ` : "";
   const reason =
     `${BLOCKED}${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
