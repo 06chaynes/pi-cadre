@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - a line number written as `line ~647` or after a file path (`auth_oidc.rs:1638`) is a position in the code;
   - a value rounded from a source's decimals (71 °C from 71.2°C, with two significant digits or more) and a value a
     source writes with a scale word (9.73 million for 9,730,000) are supported.
+- A value the answer gives as typical whose sources state it only as a bound or a possibility is named by the source
+  check ("typically 90 minutes" from "sperm whales can dive for 90+ minutes", the research battery's recurring miss),
+  and two-digit values given as typical are checked at all. Over 234 saved sessions it names no other claim.
 - A path-guard block names the active tools beyond Pi's own as the way to outside information, or none when there are
   none; it named `web_search` whether or not such a tool was installed (Ollama's web tools are `web_search` and
   `web_fetch`; without a web extension there is none).

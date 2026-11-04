@@ -818,11 +818,15 @@ export default async function (pi: ExtensionAPI) {
           })
           .join("\n");
       for (const [where, text] of produced) {
-        for (const { claim, passage, circular } of unsupportedClaims(withItems(text), sources, evidence, fetched)) {
+        for (const { claim, passage, circular, bound } of unsupportedClaims(withItems(text), sources, evidence, fetched)) {
           if (named.has(claim.value) || named.size >= MAX_CLAIMS_NAMED) continue;
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
-          const why = circular ? "appears only in results of a search that already contained it, so no source confirms it" : "appears in no source";
+          const why = circular
+            ? "appears only in results of a search that already contained it, so no source confirms it"
+            : bound
+              ? "is given as typical, but its sources state it only as a bound or a possibility (up to, can, more than), not a typical value"
+              : "appears in no source";
           if (passage) quoted.push(passage);
           lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage [${quoted.length}]` : ""}.`);
         }

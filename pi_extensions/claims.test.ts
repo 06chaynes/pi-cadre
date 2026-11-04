@@ -121,6 +121,24 @@ test("the false-alarm fixes do not accept wrong values or made-up quotes", () =>
   assert.equal(unsupportedClaims("The file is 200000000000 bytes.", ["The file is 200 B on disk."]).length, 1);
 });
 
+test("a value given as typical that its sources state only as a bound or a possibility is unsupported, and says so", () => {
+  // The recurring research miss: "Sperm whales can dive for 90+ minutes" became "typically 90 minutes".
+  const bound = ["Sperm whales can dive for 90+ minutes, while humpback whales typically dive for 15-30 minutes."];
+  const [flagged] = unsupportedClaims("A sperm whale typically holds its breath for 90 minutes on a dive.", bound);
+  assert.equal(flagged?.claim.value, "90");
+  assert.equal(flagged?.bound, true);
+  // A source that gives the value as typical supports it; an answer that states its own bound is honest.
+  const routine = ["Sperm whales routinely hold their breath for 60 to 90 minutes on a dive."];
+  assert.deepEqual(unsupportedClaims("A sperm whale typically holds its breath for 90 minutes on a dive.", routine), []);
+  assert.deepEqual(unsupportedClaims("A sperm whale can dive for up to 90 minutes, more than most whales.", bound), []);
+  // Any clear source giving it plainly supports it, even beside bounds; an unrelated number elsewhere does not count.
+  const mixed = [...bound, "Sperm whales regularly dive for 60-90 minutes, and some dives last up to 2 hours."];
+  assert.deepEqual(unsupportedClaims("A sperm whale typically holds its breath for 60–90 minutes on a dive.", mixed), []);
+  assert.equal(unsupportedClaims("A sperm whale typically holds its breath for 90 minutes on a dive.", [...bound, "The Pentium ran at 90 MHz for a long time."]).length, 1);
+  // Without a typical word the bound reading is the answer's own business.
+  assert.deepEqual(unsupportedClaims("Sperm whales dive for 90 minutes or more.", bound), []);
+});
+
 test("an answer may group digits with plain spaces", () => {
   assert.deepEqual(values("Light travels at 299 792 458 m/s, in 2024 12 labs agree."), ["number:299792458", "number:2024"]);
 });
