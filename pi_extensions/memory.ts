@@ -57,6 +57,12 @@ export function passages(stored: Stored, maxChars: number, from = 0): Passage[] 
   return out;
 }
 
+/** The items `task` lists ("1. ...", "- ..."), in order; empty when it lists fewer than two. */
+export function listedItems(task: string): string[] {
+  const items = task.split("\n").flatMap((line) => line.match(ITEM)?.[1] ?? []);
+  return items.length >= 2 ? items : [];
+}
+
 // Words a clause needs to be its own query ("Cover" before a colon is not one).
 const MIN_CLAUSE_WORDS = 3;
 
@@ -67,7 +73,7 @@ const MIN_CLAUSE_WORDS = 3;
  * current step, so recalled passages stay the same between requests and the server can reuse its cached prompt.
  */
 export function taskQueries(task: string): string[] {
-  const items = task.split("\n").flatMap((line) => line.match(ITEM)?.[1] ?? []);
+  const items = listedItems(task);
   if (items.length >= 2) return items;
   const clauses = task
     .split(/(?<=[.?!])\s+/)

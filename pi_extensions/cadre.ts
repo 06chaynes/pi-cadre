@@ -31,7 +31,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { guardReason } from "./guard.ts";
 import { researchQuestion, routeRequest } from "./router.ts";
-import { passages, recall, taskQueries } from "./memory.ts";
+import { listedItems, passages, recall, taskQueries } from "./memory.ts";
 import { itemFor, keepBest, rerankScores } from "./rerank.ts";
 import { projectMap } from "./projectmap.ts";
 import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
@@ -769,8 +769,23 @@ export default async function (pi: ExtensionAPI) {
         });
       const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, ...numbered];
       const evidence = results.map((r) => r.text);
+      // A line that refers to a listed item by number ("- Item 9: 299,792,458 m/s.", "9. ...") is read with that item's
+      // text, so its values are checked against sources about the item rather than flagged for lacking topic words.
+      const items = listedItems(lastPrompt);
+      const withItems = (text: string) =>
+        text
+          .split("\n")
+          .map((line) => {
+            const ref = line.match(/\bitem\s+(\d+)\b/i) ?? line.match(/^\s*(?:[-*]\s*)?\**(\d+)[.)]/);
+            const n = Number(ref?.[1]);
+            if (!ref || n < 1 || n > items.length) return line;
+            // After the reference itself, without its closing full stop, so it stays in the claim's sentence.
+            const at = ref.index! + ref[0].length;
+            return `${line.slice(0, at)} (${items[n - 1].replace(/[.?!]+\s*$/, "")})${line.slice(at)}`;
+          })
+          .join("\n");
       for (const [where, text] of produced) {
-        for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence, fetched)) {
+        for (const { claim, passage, circular } of unsupportedClaims(withItems(text), sources, evidence, fetched)) {
           if (named.has(claim.value) || named.size >= MAX_CLAIMS_NAMED) continue;
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;

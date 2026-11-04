@@ -951,6 +951,28 @@ test("a value no source supports gets one corrective step naming it and quoting 
   assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
 });
 
+test("a short line that refers to a listed item by number is checked against sources about that item", async () => {
+  // After a corrective step the model summarised "- Item 9: 299,792,458 m/s."; the line has no topic words, so the
+  // check flagged values its sources state, the speed of light among them.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research each of these:\n1. The melting point of tungsten in degrees Celsius.\n2. The speed of light in a vacuum in metres per second.";
+  const settle = async (final: string) => {
+    const { session } = realSession([
+      { role: "user", content: prompt },
+      toolCall("s1", "web_search", { queries: ["tungsten melting point", "speed of light vacuum"] }),
+      toolResult("s1", "web_search", "Tungsten has the highest melting point of all metals, 3422 °C.\n\nThe speed of light in a vacuum is exactly 299,792,458 metres per second."),
+      answer(final),
+    ]);
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  };
+  assert.equal((await settle("Results:\n- **Item 1**: 3422 °C.\n2. 299,792,458 m/s."))?.continue, undefined);
+  // A value the item's sources do not state is still named.
+  assert.match((await settle("Results:\n- **Item 1**: 3410 °C."))?.entries[0].content, /3410 \(in "/);
+});
+
 test("a value found only through a call that carried it as a guess gets a corrective step that says so", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
