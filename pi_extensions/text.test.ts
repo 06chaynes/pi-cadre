@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { bm25, guesses, keywords, withoutGuesses } from "./text.ts";
+import { bm25, guesses, keywords, terms, withoutGuesses } from "./text.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
+
+test("terms takes linear time on a long run of capitals, which a web page can contain", () => {
+  // The earlier pattern backtracked quadratically: 40,000 capitals and one lowercase letter took 2.4 s, a 1 MB page
+  // minutes, hanging Pi at the end-of-run source check.
+  const started = Date.now();
+  terms("A".repeat(1_000_000) + "a");
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+  assert.deepEqual(terms("ML and 3D models in NASA's MLops"), ["ml", "3d", "models", "nasa", "mlops"]);
+});
 
 test("keywords keeps the distinctive words of a request", () => {
   assert.deepEqual(keywords(QUESTION), ["year", "largest", "known", "prime", "found", "notes", "txt"]);

@@ -15,7 +15,9 @@ const STOPWORDS = new Set(
  * acronyms written in capitals (ML, AI, 3D), without stopwords.
  */
 export function terms(text: string): string[] {
-  const words = text.match(/\b[A-Z0-9]*[A-Z][A-Z0-9]*\b|[A-Za-z0-9]+/g) ?? [];
+  // One linear scan: a capitals-first alternative before it matched the same runs but backtracked quadratically on a
+  // long run of capitals (a web page), and gave identical words on every saved session's text.
+  const words = text.match(/[A-Za-z0-9]+/g) ?? [];
   return words
     .filter((word) => word.length >= 3 || (word.length === 2 && word === word.toUpperCase() && /[A-Z]/.test(word)))
     .map((word) => word.toLowerCase())
