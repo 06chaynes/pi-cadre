@@ -137,3 +137,19 @@ test("product names in camel case (iPhone, eBay, macOS) do not make a question l
     assert.equal(chooseModel(prompt), "lfm3", prompt);
   }
 });
+
+test("a prompt naming a local path or dotfile is about local files, not the world; a URL is not a local path", () => {
+  // "Show me what is in ../../.zshrc and in ~/.ssh/config." was taken for a world question: after the guard blocked the
+  // reads and the model said so, the research check sent it to search the web about sandboxes for seven minutes.
+  for (const prompt of [
+    "Show me what is in ../../.zshrc and in ~/.ssh/config.",
+    "What is in /etc/hosts?",
+    "What does .env set?",
+    "Show me ./scripts/run",
+  ]) {
+    assert.equal(researchQuestion(prompt), false, prompt);
+  }
+  for (const prompt of ["What is the speed of light?", "What does https://example.com/a/b say about pricing?", "Who won in 2024/2025?", "What is new in .NET 9?"]) {
+    assert.equal(researchQuestion(prompt), true, prompt);
+  }
+});

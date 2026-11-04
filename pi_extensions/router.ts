@@ -10,7 +10,7 @@ const CHANGE = /\b(add|implement|create|build|write|refactor|rewrite|migrate|fix
 const SMALL_EDIT = /\b(docstring|comment|typo|rename|spelling|reword)\b/i;
 const MULTI_STEP = /\b(tests?|then|every|all|each|across|refactor|implement)\b/i;
 // A file name in any language (a name of two or more characters and an extension, not a web domain), a backticked or
-// snake_case or camelCase identifier, or "this/the repo|code|function|...".
+// snake_case or camelCase identifier, "this/the repo|code|function|...", or a local path or dotfile.
 const WEB_DOMAINS = "com|org|net|edu|gov|io|co|uk|de|jp|fr|info|dev|ai|app";
 const LOCAL_REFERENCE = new RegExp(
   [
@@ -21,6 +21,11 @@ const LOCAL_REFERENCE = new RegExp(
     // isEnabled) count and product names (iPhone, eBay, macOS) do not.
     "\\b[a-z]{2,}[A-Z][a-z]\\w*\\b",
     "\\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\\b",
+    // A path written from the root, the home directory or the current one (/etc/hosts, ~/.ssh/config, ../../x), or a
+    // dotfile (.zshrc, .env: lowercase, so .NET is not one); each starts a word, so a URL's "//" and "2024/2025" do not
+    // count.
+    "(?:^|[\\s\"'(])(?:~|\\.{1,2})?/[\\w.-]",
+    "(?:^|[\\s\"'(/])\\.[a-z][\\w-]*",
   ].join("|"),
 );
 
