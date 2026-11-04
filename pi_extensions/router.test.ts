@@ -149,7 +149,30 @@ test("a prompt naming a local path or dotfile is about local files, not the worl
   ]) {
     assert.equal(researchQuestion(prompt), false, prompt);
   }
-  for (const prompt of ["What is the speed of light?", "What does https://example.com/a/b say about pricing?", "Who won in 2024/2025?", "What is new in .NET 9?"]) {
+  for (const prompt of [
+    "What is the speed of light?",
+    "What does https://example.com/a/b say about pricing?",
+    "Who won in 2024/2025?",
+    "What is new in .NET 9?",
+    // Domains, subreddits and slash-tags are the web, not local files (found in review: each went to LFM3 unchecked).
+    "Who owns the .io domain?",
+    "What are .com domains used for, e.g. .com vs .org?",
+    "What is the .us domain?",
+    "Who founded .onion sites?",
+    "What do people on /r/programming think of Rust?",
+    "What does the /s mean on Reddit?",
+    "Who won the 2022 World Cup? (/sports)",
+  ]) {
     assert.equal(researchQuestion(prompt), true, prompt);
   }
+  for (const prompt of ["What does .gitignore exclude here?", "What is in /etc/hosts?", "Is $HOME/.ssh/config used?"]) {
+    assert.equal(researchQuestion(prompt), false, prompt);
+  }
+});
+
+test("researchQuestion takes linear time on a long pasted prompt of hyphen-joined words", () => {
+  // The file-name pattern could start after every hyphen and scanned the rest each time: 100,000 pairs took 63 s.
+  const started = Date.now();
+  researchQuestion(`What ${"a-".repeat(200_000)}`);
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
 });

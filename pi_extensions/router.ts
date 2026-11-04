@@ -14,18 +14,20 @@ const MULTI_STEP = /\b(tests?|then|every|all|each|across|refactor|implement)\b/i
 const WEB_DOMAINS = "com|org|net|edu|gov|io|co|uk|de|jp|fr|info|dev|ai|app";
 const LOCAL_REFERENCE = new RegExp(
   [
-    `\\b[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
+    // Starts only where a run of word characters and hyphens starts: starting after every hyphen took quadratic time.
+    `(?<![\\w-])[\\w-]{2,}(\\.[\\w-]+)*\\.(?!(?:${WEB_DOMAINS})\\b)[a-z][a-z0-9]{0,5}\\b(?![./]\\w)`,
     "`[^`]+`",
     "\\b[a-z0-9]+_[a-z0-9_]+\\b",
     // camelCase: two or more lowercase letters, then a capital and a lowercase letter, so identifiers (restockReport,
     // isEnabled) count and product names (iPhone, eBay, macOS) do not.
     "\\b[a-z]{2,}[A-Z][a-z]\\w*\\b",
     "\\b(this|the) (repo|repository|project|code|codebase|file|function|method|class|module|test)\\b",
-    // A path written from the root, the home directory or the current one (/etc/hosts, ~/.ssh/config, ../../x), or a
-    // dotfile (.zshrc, .env: lowercase, so .NET is not one); each starts a word, so a URL's "//" and "2024/2025" do not
-    // count.
-    "(?:^|[\\s\"'(])(?:~|\\.{1,2})?/[\\w.-]",
-    "(?:^|[\\s\"'(/])\\.[a-z][\\w-]*",
+    // A path from the home or current directory (~/.ssh, ../../x), or from the root with two parts (/etc/hosts; not
+    // /r/ or /u/, which are Reddit, and not one-part tags like /s), starting a word so a URL's "//" and "2024/2025" do
+    // not count. A dotfile (.zshrc, .env): lowercase (not .NET), not a web domain or two-letter one (.io, .com, .us),
+    // and not followed by "domain", "TLD" or "sites".
+    "(?:^|[\\s\"'(])(?:(?:~|\\.{1,2})/[\\w.-]|/(?![ru]/)[\\w.-]+/[\\w.-])",
+    `(?:^|[\\s"'(/])\\.(?!(?:${WEB_DOMAINS}|[a-z]{2})\\b)[a-z][\\w-]*\\b(?!\\s+(?:domains?|tld|sites?)\\b)`,
   ].join("|"),
 );
 
