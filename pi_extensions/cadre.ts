@@ -24,6 +24,7 @@
  * Every request gets short coding rules appended to the system message.
  */
 
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -856,10 +857,12 @@ export default async function (pi: ExtensionAPI) {
    * output stays tool output, never a user turn.
    */
   const toolPair = (name: string, args: Record<string, unknown>, text: string) => {
-    const id = `cadre-${name}-${Date.now()}`;
+    // The ID comes from the content, so the same context gives the same request and the server reuses its cached
+    // prompt; an ID made from the time changed every request from this point on.
+    const id = `cadre-${name}-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-    const call = { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], api: "openai-completions", provider: PROVIDER, model: ROUTER_ID, usage, stopReason: "toolUse", timestamp: Date.now() };
-    const result = { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: Date.now() };
+    const call = { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], api: "openai-completions", provider: PROVIDER, model: ROUTER_ID, usage, stopReason: "toolUse", timestamp: 0 };
+    const result = { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: 0 };
     return [call, result] as any[];
   };
 

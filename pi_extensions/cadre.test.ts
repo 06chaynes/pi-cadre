@@ -686,6 +686,10 @@ test("passages of a result that compaction removed come back right after the sum
   assert.deepEqual([back.role, back.toolName], ["toolResult", "recall"]);
   assert.match(JSON.stringify(back.content), /41,024,320 digits/);
   assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
+  // The same context gives the same request, so the server can reuse its cached prompt (the call's ID was the time).
+  await new Promise((r) => setTimeout(r, 5));
+  const again = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
+  assert.equal(JSON.stringify(again.messages), JSON.stringify(result.messages));
 });
 
 test("between clearing events every step keeps its reasoning, so each request starts with the previous one", async () => {
