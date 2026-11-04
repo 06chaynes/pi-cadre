@@ -1,6 +1,11 @@
 @echo off
-REM Starts llama-server using cadre_config.env (see that file for MODEL values). Flags override the config.
+REM Starts llama-server using cadre_config.env (see that file for MODEL values). Flags override the config;
+REM arguments after -- go to llama-server.
 setlocal
+REM shift also moves %0, so the script's own path is kept before the flags are read.
+set "SELF=%~f0"
+set "SELF_NAME=%~nx0"
+set "EXTRA_ARGS="
 set "PROJECT_DIR=%~dp0.."
 if exist "%PROJECT_DIR%\cadre_config.env" (
     for /f "usebackq eol=# tokens=1,* delims==" %%G in ("%PROJECT_DIR%\cadre_config.env") do set "%%G=%%H"
@@ -8,24 +13,53 @@ if exist "%PROJECT_DIR%\cadre_config.env" (
 
 :args
 if "%~1"=="" goto run
-if /i "%~1"=="-m" (set "MODEL=%~2") else if /i "%~1"=="-c" (set "CTX_SIZE=%~2") else if /i "%~1"=="-np" (set "PARALLEL_SLOTS=%~2") else if /i "%~1"=="-p" (set "PORT=%~2") else if /i "%~1"=="-ngl" (set "N_GPU_LAYERS=%~2") else (
-    echo Usage: %~nx0 [-m dual^|spark^|lfm3^|reranker^|HF_ID^|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS]
+if "%~1"=="--" goto extra
+if "%~1"=="-h" goto help
+if "%~1"=="--help" goto help
+set "FLAG="
+if "%~1"=="-m" set "FLAG=MODEL"
+if "%~1"=="--model" set "FLAG=MODEL"
+if "%~1"=="-c" set "FLAG=CTX_SIZE"
+if "%~1"=="--ctx-size" set "FLAG=CTX_SIZE"
+if "%~1"=="-np" set "FLAG=PARALLEL_SLOTS"
+if "%~1"=="--parallel" set "FLAG=PARALLEL_SLOTS"
+if "%~1"=="-p" set "FLAG=PORT"
+if "%~1"=="--port" set "FLAG=PORT"
+if "%~1"=="-ngl" set "FLAG=N_GPU_LAYERS"
+if "%~1"=="--gpu-layers" set "FLAG=N_GPU_LAYERS"
+if not defined FLAG (
+    call :usage >&2
     exit /b 1
 )
+set "%FLAG%=%~2"
 shift
 shift
 goto args
 
+:extra
+shift
+if "%~1"=="" goto run
+set EXTRA_ARGS=%EXTRA_ARGS% %1
+goto extra
+
+:help
+call :usage
+exit /b 0
+
+:usage
+echo Usage: %SELF_NAME% [-m dual^|spark^|lfm3^|reranker^|HF_ID^|PATH.gguf] [-c CTX_SIZE] [-np PARALLEL_SLOTS] [-p PORT] [-ngl GPU_LAYERS] [-- llama-server args]
+exit /b 0
+
 :run
 where llama-server >nul 2>nul || (
-    echo llama-server not found in PATH. Install llama.cpp or run: python setup_wizard.py
+    >&2 echo llama-server not found in PATH. Install llama.cpp or run: python setup_wizard.py
     exit /b 1
 )
 if not defined MODEL set MODEL=dual
 
 if /i "%MODEL%"=="dual" (
-    start "Spark-X2.6-4B" cmd /k ""%~f0" -m spark -c "" -np "" -p """
-    start "LFM3-1.7B" cmd /k ""%~f0" -m lfm3 -c "" -np "" -p """
+    start "Spark-X2.6-4B" cmd /k ""%SELF%" -m spark -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%" --%EXTRA_ARGS%"
+    start "LFM3-1.7B" cmd /k ""%SELF%" -m lfm3 -c "" -np "" -p "" -ngl "%N_GPU_LAYERS%" --%EXTRA_ARGS%"
     exit /b 0
 )
 
@@ -58,4 +92,4 @@ for /f "tokens=1-3" %%a in ("%DEFAULTS%") do (
 if not defined HOST set HOST=127.0.0.1
 if not defined N_GPU_LAYERS set N_GPU_LAYERS=99
 
-llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja %MODE_ARGS%
+llama-server %SOURCE% --host %HOST% --port %PORT% --ctx-size %CTX_SIZE% --parallel %PARALLEL_SLOTS% -ngl %N_GPU_LAYERS% --jinja %MODE_ARGS%%EXTRA_ARGS%

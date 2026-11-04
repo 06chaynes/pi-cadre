@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows launchers, checked case by case against the shell scripts on a Windows Server 2022 VM:
+  `start_llama_server.bat -m dual` (or dual mode with any flag) started nothing, because `shift` also moves `%0` and
+  the script relaunched a file named after the last flag; it now keeps its own path. It also gains what the shell
+  script and README already offered: `-h`/`--help`, the long flags, and arguments after `--` (`-- --device <name>`).
+  Errors go to stderr. `searxng.bat` prints its header as help (it printed internal comments and `^|`) and generates
+  the SearXNG secret with a cryptographic generator instead of `Get-Random`.
+- Shell launchers: dual mode passes `-ngl` to both servers (each reread the config and dropped it) and exits 0 when
+  both servers exit cleanly; a `.GGUF` path in capitals counts as a local file, as on Windows; `searxng.sh --help` no
+  longer prints `set -euo pipefail`.
+- `tests/test_launchers.py` runs the launchers of the platform it is on (CI covers Linux, macOS and Windows) with
+  stand-ins for llama-server and pi, against the same expected calls.
+
 ## [0.3.1]
 
 ### Changed

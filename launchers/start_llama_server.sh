@@ -33,9 +33,9 @@ fi
 
 case ${MODEL:-dual} in
     dual)
-        trap 'kill $(jobs -p) 2>/dev/null' EXIT
-        "$0" -m spark -c "" -np "" -p "" -- "${EXTRA_ARGS[@]}" &
-        "$0" -m lfm3 -c "" -np "" -p "" -- "${EXTRA_ARGS[@]}" &
+        trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+        "$0" -m spark -c "" -np "" -p "" -ngl "${N_GPU_LAYERS:-}" -- "${EXTRA_ARGS[@]}" &
+        "$0" -m lfm3 -c "" -np "" -p "" -ngl "${N_GPU_LAYERS:-}" -- "${EXTRA_ARGS[@]}" &
         wait
         exit
         ;;
@@ -48,7 +48,7 @@ case ${MODEL:-dual} in
     *) ID=$MODEL; DEFAULTS=(8080 32768 8) ;;
 esac
 case $ID in
-    *.gguf) SOURCE=(-m "$ID") ;;
+    *.[gG][gG][uU][fF]) SOURCE=(-m "$ID") ;;
     *) SOURCE=(-hf "$ID") ;;
 esac
 
