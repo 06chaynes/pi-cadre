@@ -992,22 +992,6 @@ test("a line number is supported by the numbered lines of a read, and a wrong on
   assert.match((await run("1488")).entries[0].content, /1488 \(in "/);
 });
 
-test("a value given as typical that its sources state only as a bound gets a corrective step that says so", async () => {
-  serveProps({ 8080: 32768, 8081: 16384 });
-  const { pi, calls } = fakePi();
-  await extension(pi as any);
-  const prompt = "How long does a sperm whale typically hold its breath on a dive?";
-  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
-  const { session } = realSession([
-    { role: "user", content: prompt },
-    toolCall("s1", "web_search", { query: "sperm whale dive" }),
-    toolResult("s1", "web_search", "Sperm whales can dive for 90+ minutes, while humpbacks dive for 15-30 minutes."),
-    answer("A sperm whale typically holds its breath for 90 minutes."),
-  ]);
-  const result = await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
-  assert.match(result.entries[0].content, /90 \(in "A sperm whale typically holds its breath for 90 minutes\."\) is given as typical, but its sources state it only as a bound/);
-});
-
 test("a value no source supports gets one corrective step naming it and quoting the closest passage", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
