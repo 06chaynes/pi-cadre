@@ -40,7 +40,7 @@ import { guesses, withoutGuesses } from "./text.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
-import { unsupportedClaims } from "./claims.ts";
+import { bareUrl, unsupportedClaims } from "./claims.ts";
 import { shortenHits, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
@@ -516,7 +516,7 @@ export default async function (pi: ExtensionAPI) {
       const lines = pairs.length ? ["Earlier in this session (condensed by cadre without a model; newest answers are verbatim):", ...renderDigest(pairs)] : [];
       if (!condense) {
         lines.push("The current request and all work on it follow unchanged.");
-        return { compaction: { summary: lines.join("\n"), firstKeptEntryId: entries[current].sourceEntry.id, tokensBefore: (event.preparation as any).tokensBefore ?? 0 } };
+        return { compaction: { summary: contained(lines.join("\n")), firstKeptEntryId: entries[current].sourceEntry.id, tokensBefore: (event.preparation as any).tokensBefore ?? 0 } };
       }
       // Steps before the last KEEP_STEPS: each call and a one-line outcome. Their full results stay in the session.
       const results = new Map<string, any>();
@@ -539,7 +539,7 @@ export default async function (pi: ExtensionAPI) {
       lines.push("The most recent steps follow unchanged.");
       return {
         compaction: {
-          summary: lines.join("\n"),
+          summary: contained(lines.join("\n")),
           firstKeptEntryId: steps[steps.length - KEEP_STEPS].sourceEntry.id,
           tokensBefore: (event.preparation as any).tokensBefore ?? 0,
         },
@@ -681,7 +681,7 @@ export default async function (pi: ExtensionAPI) {
     const run = branch.slice(start + 1);
     const results = new Map<string, any>();
     for (const m of branch) if (m.role === "toolResult") results.set(m.toolCallId, m);
-    const bare = (url: string) => url.replace(/[).,;:'"*`>\]|]+$/, "").replace(/\/$/, "");
+    const bare = (url: string) => bareUrl(url).replace(/\/$/, "");
     const urls = (text: string) => (text.match(/https?:\/\/[^\s"'<>`|)\]]+/g) ?? []).map(bare);
     const failed = new Map<string, string>();
     const read = new Set<string>();
@@ -833,8 +833,12 @@ export default async function (pi: ExtensionAPI) {
   // those events each request starts with the previous one and the server reuses its cached prompt: stripping the
   // previous step's reasoning on every request made it rebuild that step and its result each time. The session keeps
   // everything.
+  // A source-check note's passages come with it for any model: the note refers to them by number.
   pi.on("context", async (event, ctx) => {
-    if (ctx.model?.provider !== PROVIDER) return undefined;
+    if (ctx.model?.provider !== PROVIDER) {
+      const quoted = withSourceQuotes(event.messages);
+      return quoted === event.messages ? undefined : { messages: quoted };
+    }
     let messages = withoutEarlierReasoning(event.messages);
     messages = withSourceQuotes(messages);
     messages = withRecall(messages, ctx) ?? messages;
@@ -869,7 +873,7 @@ export default async function (pi: ExtensionAPI) {
     return messages.flatMap((m) => {
       const quoted: unknown = m.role === "custom" && m.customType === "cadre-sources" ? m.details?.quoted : undefined;
       if (!Array.isArray(quoted) || !quoted.length) return [m];
-      return [...toolPair("cadre_sources", {}, quoted.map((q, i) => `[${i + 1}] ${String(q)}`).join("\n\n")), m];
+      return [...toolPair("cadre_sources", {}, quoted.map((q, i) => `[${i + 1}] ${String(q)}`).join("\n\n"), String(m.timestamp)), m];
     });
   };
 
@@ -877,10 +881,17 @@ export default async function (pi: ExtensionAPI) {
    * An assistant tool call and its result carrying `text`, for context added by the extension: text that came from tool
    * output stays tool output, never a user turn.
    */
-  const toolPair = (name: string, args: Record<string, unknown>, text: string) => {
-    // The ID comes from the content, so the same context gives the same request and the server reuses its cached
-    // prompt; an ID made from the time changed every request from this point on.
-    const id = `cadre-${name}-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  /**
+   * `summary` with any <summary> or </summary> tag in the carried text defused: Pi sends a compaction summary as user
+   * text inside <summary>...</summary>, and a carried line (a step's result, an answer) could close it early.
+   */
+  const contained = (summary: string) => summary.replace(/<(\/?summary)/gi, "\u2039$1");
+
+  const toolPair = (name: string, args: Record<string, unknown>, text: string, source = "") => {
+    // The ID comes from the content (and `source`, the entry the pair belongs to), so the same context gives the same
+    // request and the server reuses its cached prompt; an ID made from the time changed every request from this point
+    // on. `source` keeps two pairs with the same text apart.
+    const id = `cadre-${name}-${createHash("sha256").update(`${source}\n${text}`).digest("hex").slice(0, 16)}`;
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
     const call = { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], api: "openai-completions", provider: PROVIDER, model: ROUTER_ID, usage, stopReason: "toolUse", timestamp: 0 };
     const result = { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: 0 };

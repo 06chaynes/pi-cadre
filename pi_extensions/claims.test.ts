@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { claimsOf, unsupportedClaims } from "./claims.ts";
+import { bareUrl, claimsOf, unsupportedClaims } from "./claims.ts";
 
 const values = (text: string) => claimsOf(text).map((c) => `${c.kind}:${c.value}`);
 
@@ -120,4 +120,21 @@ test("a power written with ^ is supported by a source whose superscript formatti
   const answer = "The largest known prime is 2^136,279,841 − 1.";
   assert.deepEqual(unsupportedClaims(answer, ["The largest known prime is 2136,279,841 − 1, found by GIMPS."]), []);
   assert.equal(unsupportedClaims("It has 279,841 digits.", ["Prime number 2136,279,841 − 1 found."]).length, 1, "a short tail is not enough");
+});
+
+test("bareUrl drops trailing punctuation in linear time, which a web page can make long", () => {
+  // The earlier pattern backtracked over a long run of URL punctuation from every start: 80,000 dots took 10 s.
+  const started = Date.now();
+  assert.equal(bareUrl(`http://a${".".repeat(1_000_000)}x`), `http://a${".".repeat(1_000_000)}x`);
+  assert.equal(bareUrl(`http://a${".".repeat(1_000_000)}`), "http://a");
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+  assert.equal(bareUrl("https://example.com/a_(b))."), "https://example.com/a_(b");
+  assert.equal(bareUrl("https://example.com/page]|*`'\">"), "https://example.com/page");
+});
+
+test("reading an answer with a very long word takes linear time", () => {
+  // The path pattern could start anywhere inside a word and backtracked over its rest: 40,000 letters took 2.6 s.
+  const started = Date.now();
+  claimsOf(`The value is 42 ${"a".repeat(200_000)} and see src/app/main.py for it.`);
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
 });

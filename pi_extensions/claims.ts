@@ -36,7 +36,8 @@ const ANSWER_NUMBER = new RegExp(`(?<![\\w.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 const SOURCE_NUMBER = new RegExp(`(?<![\\d.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 // Code and file paths are the model's own material, not claims about sources.
 const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
-const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
+// The second form starts only where a word starts: started inside a long word it backtracked over the rest of it.
+const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|(?<![\w.-])[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
 // Line numbers into files ("line 190", "lines 183-188 and 202", "sessions.py:159-210") are positions in the code, which
 // read results do not print, so like paths they are not claims about sources.
 const RANGE = "\\d+(?:\\s*[-–]\\s*\\d+)?";
@@ -54,7 +55,15 @@ const QUOTE_WORDS = 8;
 // unsupported quotes of three words or fewer were labels; every misquote had 13 words or more).
 const MIN_QUOTE_WORDS = 4;
 
-const bareUrl = (url: string) => url.replace(/[).,;:'"*`>\]|]+$/, "");
+// Characters that end a sentence or markup around a URL rather than belong to it.
+const URL_TRAILERS = new Set([...")].,;:'\"*`>|"]);
+
+/** `url` without trailing punctuation, trimmed by one pass from the end (a regex backtracked on long runs of it). */
+export function bareUrl(url: string): string {
+  let end = url.length;
+  while (end > 0 && URL_TRAILERS.has(url[end - 1])) end--;
+  return url.slice(0, end);
+}
 const normUrl = (url: string) =>
   bareUrl(url)
     .replace(/^https?:\/\/(www\.|m\.)?/i, "")
