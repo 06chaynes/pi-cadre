@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The README recommends descry and gives its install line (`uv tool install 'descry-codegraph[all]'`).
+
 ### Fixed
 
 - Windows launchers, checked case by case against the shell scripts on a Windows Server 2022 VM:
@@ -17,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Shell launchers: dual mode passes `-ngl` to both servers (each reread the config and dropped it) and exits 0 when
   both servers exit cleanly; a `.GGUF` path in capitals counts as a local file, as on Windows; `searxng.sh --help` no
   longer prints `set -euo pipefail`.
+- descry runs on Windows: pip and uv install its server as `descry-mcp.exe`, which cadre did not look for, so Windows
+  sessions ran without it. Checked on the Windows Server 2022 VM: cadre's MCP calls against `descry-mcp.exe` index,
+  load embeddings and return symbols.
 - `tests/test_launchers.py` runs the launchers of the platform it is on (CI covers Linux, macOS and Windows) with
   stand-ins for llama-server and pi, against the same expected calls.
 

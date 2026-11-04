@@ -46,6 +46,17 @@ pi install npm:pi-cadre                       # published releases
 pi install git:github.com/06chaynes/pi-cadre    # latest main
 ```
 
+### Recommended: descry
+
+[descry](https://pypi.org/project/descry-codegraph/) indexes the project's code, and cadre lists the symbols that
+match each prompt (name and file:line) for the model. On a large Rust repository, "which function, in which file"
+questions went from 33 to 36 of 36, with about half the tool calls and a third less time. Install it with its embedding
+support; cadre finds it on `PATH` and starts it in each session:
+
+```bash
+uv tool install 'descry-codegraph[all]'      # or: pipx install 'descry-codegraph[all]'
+```
+
 The extension registers the `llama-cpp` provider at startup. It reads each server's per-slot context from `/props` and uses the launcher default (Spark 32768, LFM3 16384) for a server that is not running yet. Thinking levels are sent as chat template kwargs: Spark accepts `low` and `high` effort, so Pi's `medium` maps to `high`.
 
 It also registers `llama-cpp/cadre`, a model that picks Spark or LFM3 for each prompt. LFM3 gets questions and single-spot edits (a docstring, a typo, a rename); Spark gets everything else, including anything that mentions tests, several steps, or a change to behavior. A turn stays on the model that started it unless the conversation outgrows LFM3 (for example after a large tool result), a failed LFM3 request retries on Spark, and prompts the router cannot classify go to Spark. Routing to LFM3 needs at least 8192 tokens per LFM3 slot.
@@ -128,13 +139,13 @@ code, so none of this depends on the model remembering to do it:
   steps are condensed by code: the request verbatim, then each step's call and outcome.
 - **Project files and the date.** The system message lists the project's files (from git, bounded in size) and
   today's date, which Pi's own prompt does not include.
-- **Code symbols (optional).** When [descry](https://pypi.org/project/descry-codegraph/) is installed (`descry-mcp` on
-  `PATH`, or `DESCRY_MCP_BIN`), each session starts its MCP server in the working directory and the system message
-  lists the symbols matching the prompt (name and file:line). On a large Rust repository this took "which function, in
-  which file" questions from 33 to 36 of 36, with about half the tool calls. Install it with its embedding support
-  (`descry-codegraph[all]`); the first search waits for descry's embedding model to load. The first index of a large
-  repository takes a while; see descry's documentation for its settings. Only absolute `PATH` entries are searched, and on Windows
-  the integration is not yet supported.
+- **Code symbols (recommended, see Install).** When [descry](https://pypi.org/project/descry-codegraph/) is installed
+  (`descry-mcp` on `PATH`, `descry-mcp.exe` on Windows, or `DESCRY_MCP_BIN`), each session starts its MCP server in the
+  working directory and the system message lists the symbols matching the prompt (name and file:line). On a large Rust
+  repository this took "which function, in which file" questions from 33 to 36 of 36, with about half the tool calls.
+  It needs descry's embedding support (`descry-codegraph[all]`); the first search waits for descry's embedding model to
+  load. The first index of a large repository takes a while; see descry's documentation for its settings. Only
+  absolute `PATH` entries are searched.
 - **Broken edits are reported.** After an edit or write, the file is parsed (Python, JavaScript, TypeScript, Rust, or
   Go, when the parser is installed) and a syntax error is reported in the same tool result.
 - **Thinking.** Thinking is low for every prompt. On a 12-item research task, off, low and high scored 38, 40 and 27
