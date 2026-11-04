@@ -824,9 +824,11 @@ export default async function (pi: ExtensionAPI) {
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
           const why = circular
             ? "appears only in results of a search that already contained it, so no source confirms it"
-            : bound
-              ? "is given as typical, but its sources state it only as a bound or a possibility (up to, can, more than), not a typical value"
-              : "appears in no source";
+            : bound === "sources"
+              ? "is given as typical, but its sources state it only as a bound (up to, more than, a record), not a typical value"
+              : bound === "answer"
+                ? "answers an item that asks for a typical value, but gives a bound; give the typical value its sources state, or say none was found"
+                : "appears in no source";
           if (passage) quoted.push(passage);
           lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage [${quoted.length}]` : ""}.`);
         }

@@ -126,7 +126,7 @@ test("a value given as typical that its sources state only as a bound or a possi
   const bound = ["Sperm whales can dive for 90+ minutes, while humpback whales typically dive for 15-30 minutes."];
   const [flagged] = unsupportedClaims("A sperm whale typically holds its breath for 90 minutes on a dive.", bound);
   assert.equal(flagged?.claim.value, "90");
-  assert.equal(flagged?.bound, true);
+  assert.equal(flagged?.bound, "sources");
   // A source that gives the value as typical supports it; an answer that states its own bound is honest.
   const routine = ["Sperm whales routinely hold their breath for 60 to 90 minutes on a dive."];
   assert.deepEqual(unsupportedClaims("A sperm whale typically holds its breath for 90 minutes on a dive.", routine), []);
@@ -137,6 +137,45 @@ test("a value given as typical that its sources state only as a bound or a possi
   assert.equal(unsupportedClaims("A sperm whale typically holds its breath for 90 minutes on a dive.", [...bound, "The Pentium ran at 90 MHz for a long time."]).length, 1);
   // Without a typical word the bound reading is the answer's own business.
   assert.deepEqual(unsupportedClaims("Sperm whales dive for 90 minutes or more.", bound), []);
+});
+
+test("the typical-versus-bound check names no ordinary phrasing (review cases)", () => {
+  const upTo = ["Sperm whale dives can last up to 90 minutes, a record among whales."];
+  const plus = ["Sperm whales can dive for 90+ minutes."];
+  const none = (answer: string, sources: string[]) => assert.deepEqual(unsupportedClaims(answer, sources).map((u) => u.claim.value), [], answer);
+  // A typical word counts only near the number, in its own clause.
+  none("Generally, sperm whales dive for 45 minutes, and some dives reach 90 minutes.", upTo);
+  none("Usually sperm whales dive 45 minutes; some dives last 90 minutes.", upTo);
+  // A source with "can" and a typical word after the number states a typical value.
+  none("Sperm whale dives typically last 45 minutes.", ["Sperm whale dives can last 45 minutes on average."]);
+  none("The average sperm whale dive is 45 minutes.", ["For sperm whales the average dive can be 45 minutes long."]);
+  // The answer's own bound, before or after the number, is honest.
+  none("Sperm whales usually dive deep, with dives of 90+ minutes.", plus);
+  none("Sperm whale dives usually last 90 minutes or more.", plus);
+  none("Sperm whale dives usually last under 90 minutes.", upTo);
+  none("- **Typical/recorded dives:** up to **117 to 138 minutes**.", ["Recorded sperm whale dives reach up to 117 to 138 minutes."]);
+  // Two-digit values given as typical are checked only for this: not named as plain "appears in no source".
+  none("On average each test run took 12 seconds.", ["5 runs completed in 60 seconds total."]);
+  none("Sperm whales typically dive for 90 minutes.", ["Sperm whales dive for ninety minutes."]);
+  // Arithmetic is no bound; a bound on the line before is not this number's.
+  none("Sperm whale dives typically last 45 minutes.", ["A sperm whale dive of 45+15 minutes was logged; dives typically last 45 minutes."]);
+  none("Sperm whale dives typically last 45 minutes.", ["Dive data for the max\n45 minutes is a typical sperm whale dive."]);
+});
+
+test("the typical-versus-bound check finds the value it is for, wherever the number repeats", () => {
+  const plus = ["Sperm whales can dive for 90+ minutes, the record among whales."];
+  const repeated = unsupportedClaims("In 1990 studies, sperm whale dives typically lasted 90 minutes.", plus);
+  assert.deepEqual(repeated.filter((u) => u.claim.value === "90").map((u) => u.bound), ["sources"]);
+  // A table whose item asks for a typical value: a bound given as the answer is named, with that reason.
+  const row = "| 3. How long a sperm whale typically holds its breath on a dive | 90+ minutes (dive for 90+ minutes). |";
+  assert.deepEqual(unsupportedClaims(row, plus).map((u) => [u.claim.value, u.bound]), [["90", "answer"]]);
+});
+
+test("reading two-digit typical values stays linear on a long answer line", () => {
+  const line = "on average 45 dives a day, ".repeat(12_000);
+  const started = Date.now();
+  claimsOf(line);
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
 });
 
 test("an answer may group digits with plain spaces", () => {
