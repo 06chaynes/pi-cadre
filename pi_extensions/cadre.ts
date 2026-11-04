@@ -669,12 +669,14 @@ export default async function (pi: ExtensionAPI) {
     // The user named a path outside the project and the guard blocked a call on it: the answer is about that file,
     // not the world (asked for web sources, Spark searched about sandboxes for seven minutes).
     const calls = new Map(run.flatMap((m) => (m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => [b.id, b]) : [])));
-    const named = (call: any) => {
+    // Only a word the prompt names that the guard itself blocks counts: a URL or "3.13" in a blocked command does not.
+    const named = (name: string, call: any) => {
       const args = call?.arguments ?? {};
       const words = typeof args.path === "string" ? [args.path] : String(args.command ?? "").split(/[\s;|&()<>'"`=]+/);
-      return words.some((w: string) => w.length >= 3 && /[/~.]/.test(w) && lastPrompt.includes(w));
+      return words.some((w: string) => w.length >= 3 && lastPrompt.includes(w) && guardReason(name, name === "bash" ? { command: w } : { path: w }, ctx.cwd, homedir()) !== undefined);
     };
-    if (run.some((m) => m.role === "toolResult" && m.isError && textOf(m).startsWith(BLOCKED) && named(calls.get(m.toolCallId)))) return undefined;
+    const blocked = (m: any) => m.role === "toolResult" && m.isError && LOCAL_TOOLS.has(m.toolName) && textOf(m).startsWith(BLOCKED);
+    if (run.some((m) => blocked(m) && named(m.toolName, calls.get(m.toolCallId)))) return undefined;
     return `Research check: this answer was given without any source. Look it up with ${remote.join(", ")}, then answer from what the sources say.`;
   };
 

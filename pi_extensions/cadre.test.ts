@@ -1132,6 +1132,16 @@ test("a question about the world answered without any source gets one step askin
   // A blocked call the prompt did not ask for leaves the check in place.
   const wandered = [toolCall("b1", "bash", { command: "find / -name whales.txt" }), { ...toolResult("b1", "bash", "Blocked: bash reaches /, outside the project /x/proj."), isError: true }, answer("About 3 minutes.")];
   assert.equal((await settle(whale, wandered, web)).entries[0].customType, "cadre-research", "a blocked call the prompt did not name");
+  // Only a word the guard itself blocks counts, and only from the tools it guards (found in review: a blocked curl to
+  // /tmp of a URL the prompt named silenced the check, and so did "3.13" or "U.S." in a blocked command).
+  const page = "What does https://example.com/page say about pricing?";
+  const curl = [toolCall("b2", "bash", { command: "curl -s https://example.com/page -o /tmp/p.html" }), { ...toolResult("b2", "bash", "Blocked: bash reaches /tmp/p.html, outside the project /x/proj."), isError: true }, answer("It costs $10.")];
+  assert.equal((await settle(page, curl, web)).entries[0].customType, "cadre-research", "the URL is not what the guard blocked");
+  const python = "What changed in Python 3.13 compared to 3.12?";
+  const pyenv = [toolCall("b3", "bash", { command: "ls ~/.pyenv/versions | grep 3.13" }), { ...toolResult("b3", "bash", "Blocked: bash reaches ~/.pyenv/versions, outside the project /x/proj."), isError: true }, answer("A free-threaded build.")];
+  assert.equal((await settle(python, pyenv, web)).entries[0].customType, "cadre-research", "3.13 is not a blocked path");
+  const other = [toolCall("o1", "vault_read", { path: "../../.zshrc" }), { ...toolResult("o1", "vault_read", "Blocked: vault locked"), isError: true }, answer("It sets PATH.")];
+  assert.equal((await settle(outside, other, web)).entries[0].customType, "cadre-research", "another extension's error is not the guard");
 });
 
 test("the system message lists the project's files", async () => {
