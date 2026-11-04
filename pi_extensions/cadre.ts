@@ -502,7 +502,9 @@ export default async function (pi: ExtensionAPI) {
           const text = textOf(message).trim();
           if (message.role === "user") pairs.push([text.slice(0, 500), ""]);
           else if (message.role === "assistant" && text && pairs.length) pairs[pairs.length - 1][1] = text.slice(0, 1500);
-          else if (message.role !== "assistant" && message.role !== "toolResult" && text) {
+          // Only an earlier compaction or branch summary is carried: cadre's own notes quote source text, which a page
+          // could lay out like a summary.
+          else if ((message.role === "compactionSummary" || message.role === "branchSummary") && text) {
             const [earlier, stepBlock] = text.split(STEPS_HEADING);
             if (stepBlock) carried.push(...stepBlock.split("\n").filter((line: string) => /^\d+\. /.test(line)).map((line: string) => line.replace(/^\d+\. /, "")));
             const prior = earlier.split(REQUEST_HEADING)[0].trim();
