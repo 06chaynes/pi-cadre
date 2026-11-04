@@ -31,7 +31,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 import { guardReason } from "./guard.ts";
 import { researchQuestion, routeRequest } from "./router.ts";
-import { passages, recall, taskQueries } from "./memory.ts";
+import { listedItems, passages, recall, taskQueries } from "./memory.ts";
 import { itemFor, keepBest, rerankScores } from "./rerank.ts";
 import { projectMap } from "./projectmap.ts";
 import { DescryServer, descryMcpCommand, descrySymbols } from "./descry.ts";
@@ -81,6 +81,11 @@ const SYMBOLS_MAX_CHARS = 1200;
 // Recall (see memory.ts): most characters of cleared passages brought back per request, from web tools only. Local
 // tools are left out: a file or command output can have changed since, and running the tool again is exact.
 const RECALL_MAX_CHARS = 6000;
+// When clearing has to run, kept results go down to this share of their room, so clearing (which makes the server
+// rebuild the prompt from the first cleared result on) runs less often: 1-2 times per large write-up instead of 5-8.
+const CLEAR_TO_SHARE = 0.6;
+// Most characters of reasoning kept from earlier steps between clearing events; past it, all but the newest step's go.
+const REASONING_KEEP_MAX_CHARS = 12_000;
 // Pi's own local tools: their output can go stale (a file edited since it was read), and running them again is exact,
 // so their results are never recalled. Every other tool's results can be, whichever extension provides it.
 // Files whose text is prose an answer may put claims in; code files are left to the syntax check.
@@ -89,6 +94,18 @@ const PROSE_FILE = /\.(md|markdown|txt|rst|adoc|org)$/i;
 const MAX_CLAIMS_NAMED = 6;
 const CLAIM_CONTEXT_CHARS = 160;
 const LOCAL_TOOLS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+// Query-like arguments of a web tool, from which guessed numbers are removed before the call runs.
+const QUERY_KEYS = ["query", "queries", "q", "search_query", "searchQuery"];
+
+/** Removes from `input`'s query-like fields the numbers that `known` does not contain (see withoutGuesses). */
+function cleanQueries(input: Record<string, unknown>, known: string) {
+  const clean = (query: string) => withoutGuesses(query, known).replace(/\s{2,}/g, " ").trim();
+  for (const key of QUERY_KEYS.filter((k) => k in input)) {
+    const value = input[key];
+    if (typeof value === "string") input[key] = clean(value);
+    else if (Array.isArray(value)) input[key] = value.map((v) => (typeof v === "string" ? clean(v) : v));
+  }
+}
 
 // The digest condenses the current request's steps before the last KEEP_STEPS, each as its call and a one-line outcome.
 const KEEP_STEPS = 3;
@@ -253,15 +270,7 @@ export default async function (pi: ExtensionAPI) {
   const branchMessages = (ctx: ExtensionContext) => ((ctx.sessionManager?.getBranch() ?? []) as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
 
   const neutralizeQueries = (input: Record<string, unknown>, ctx: ExtensionContext) => {
-    const keys = ["query", "queries", "q", "search_query", "searchQuery"].filter((key) => key in input);
-    if (!keys.length) return;
-    const known = knownByCall(branchMessages(ctx))("");
-    const clean = (query: string) => withoutGuesses(query, known).replace(/\s{2,}/g, " ").trim();
-    for (const key of keys) {
-      const value = input[key];
-      if (typeof value === "string") input[key] = clean(value);
-      else if (Array.isArray(value)) input[key] = value.map((v) => (typeof v === "string" ? clean(v) : v));
-    }
+    cleanQueries(input, knownByCall(branchMessages(ctx))(""));
   };
 
   /** Tokens in a tool result on the densest tokenizer among the running servers, since either model may read it. */
@@ -429,6 +438,8 @@ export default async function (pi: ExtensionAPI) {
   });
 
   let continued = false;
+  // Steps with a timestamp at or before this lose their reasoning in requests (see withoutEarlierReasoning).
+  let reasoningKeptAfter = 0;
   // The project file map for the current prompt (built at its start), or "" when off.
   let map = "";
   // descry's symbols for the current prompt, or "" when descry is not installed or nothing matched.
@@ -602,7 +613,12 @@ export default async function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
     const keep = resultRoom();
-    const edits = await clearResults(event.context.contextEntries, keep, new Set(event.toolResultEntryIds), "to make room");
+    const unseen = new Set(event.toolResultEntryIds);
+    if (!(await clearResults(event.context.contextEntries, keep, unseen, "to make room")).length) return undefined;
+    const edits = await clearResults(event.context.contextEntries, Math.floor(keep * CLEAR_TO_SHARE), unseen, "to make room");
+    // The server rebuilds the prompt from the first cleared result on, so earlier steps' reasoning leaves now too.
+    const steps = event.context.contextEntries.flatMap((projected: any) => projected.messages).filter((m: any) => m?.role === "assistant");
+    reasoningKeptAfter = Math.max(reasoningKeptAfter, ...steps.map((m: any) => m.timestamp ?? 0));
     return edits.length ? { entries: edits } : undefined;
   });
 
@@ -697,15 +713,27 @@ export default async function (pi: ExtensionAPI) {
     }
     {
       const sessionId = ctx.sessionManager.getSessionId?.();
-      // A result does not support the numbers its own call guessed: that search went looking for them.
+      // A result does not support the numbers its own call guessed: that call went looking for them. Guesses are read
+      // from the arguments as the call ran: a web tool's query lost its guessed numbers before it ran (the session
+      // keeps the model's original), so only guesses left elsewhere, as in a fetched URL, count.
       const knownFor = knownByCall(branch);
       const argsOf = new Map<string, string>();
-      for (const m of branch) if (m.role === "assistant") for (const b of m.content ?? []) if (b.type === "toolCall") argsOf.set(b.id, JSON.stringify(b.arguments ?? {}));
+      const asRun = new Map<string, string>();
+      for (const m of branch) {
+        if (m.role !== "assistant") continue;
+        for (const b of m.content ?? []) {
+          if (b.type !== "toolCall") continue;
+          const args = { ...(b.arguments ?? {}) };
+          argsOf.set(b.id, JSON.stringify(args));
+          if (!LOCAL_TOOLS.has(b.name)) cleanQueries(args, knownFor(b.id));
+          asRun.set(b.id, JSON.stringify(args));
+        }
+      }
       const results = branch
         .filter((m) => m.role === "toolResult" && !m.isError)
         .map((m) => ({
           text: (sessionId && loadOriginal(resultsDir(), sessionId, m.toolCallId)) || textOf(m),
-          guessed: guesses(argsOf.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
+          guessed: guesses(asRun.get(m.toolCallId) ?? "", knownFor(m.toolCallId)),
         }));
       // A failed call's error, read with the call that failed (its URL names the site), supports what the answer
       // reports about the failure ("the Britannica URL returns 403").
@@ -739,10 +767,25 @@ export default async function (pi: ExtensionAPI) {
             .map((line: string, i: number) => `${offset + i}: ${line}`)
             .join("\n");
         });
-      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, ...numbered, fetched.join("\n")];
+      const sources = [ctx.getSystemPrompt?.() ?? "", ...branch.filter((m) => m.role === "user").map(textOf), ...errors, ...results, ...numbered];
       const evidence = results.map((r) => r.text);
+      // A line that refers to a listed item by number ("- Item 9: 299,792,458 m/s.", "9. ...") is read with that item's
+      // text, so its values are checked against sources about the item rather than flagged for lacking topic words.
+      const items = listedItems(lastPrompt);
+      const withItems = (text: string) =>
+        text
+          .split("\n")
+          .map((line) => {
+            const ref = line.match(/\bitem\s+(\d+)\b/i) ?? line.match(/^\s*(?:[-*]\s*)?\**(\d+)[.)]/);
+            const n = Number(ref?.[1]);
+            if (!ref || n < 1 || n > items.length) return line;
+            // After the reference itself, without its closing full stop, so it stays in the claim's sentence.
+            const at = ref.index! + ref[0].length;
+            return `${line.slice(0, at)} (${items[n - 1].replace(/[.?!]+\s*$/, "")})${line.slice(at)}`;
+          })
+          .join("\n");
       for (const [where, text] of produced) {
-        for (const { claim, passage, circular } of unsupportedClaims(text, sources, evidence)) {
+        for (const { claim, passage, circular } of unsupportedClaims(withItems(text), sources, evidence, fetched)) {
           if (named.has(claim.value) || named.size >= MAX_CLAIMS_NAMED) continue;
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
@@ -770,11 +813,12 @@ export default async function (pi: ExtensionAPI) {
     return undefined;
   });
 
-  // Notes are part of the session, not of any one context: before each request, the latest accepted note per topic
-  // that compaction removed from context is restored in one message after the compaction summary.
-  // Before each request to a local model: reasoning from earlier steps leaves (Spark's template renders all of it, so
-  // with thinking on it would fill the window step by step), and passages of cleared web results that match the task
-  // come back (see withRecall). The session keeps everything.
+  // Before each request to a local model: reasoning of earlier steps leaves (Spark's template renders all of it, so with
+  // thinking on it would fill the window step by step), and passages of cleared results that match the task come back
+  // (see withRecall). Both change the request only when clearing runs or kept reasoning passes its budget, so between
+  // those events each request starts with the previous one and the server reuses its cached prompt: stripping the
+  // previous step's reasoning on every request made it rebuild that step and its result each time. The session keeps
+  // everything.
   pi.on("context", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER) return undefined;
     let messages = withoutEarlierReasoning(event.messages);
@@ -782,12 +826,19 @@ export default async function (pi: ExtensionAPI) {
     return messages === event.messages ? undefined : { messages };
   });
 
-  /** `messages` with thinking blocks removed from every assistant message but the last; the same array if none had any. */
+  /**
+   * `messages` with thinking removed from steps at or before reasoningKeptAfter (moved when clearing runs); when the
+   * reasoning kept after it passes REASONING_KEEP_MAX_CHARS, the mark moves to the step before the newest. The same
+   * array if nothing changed.
+   */
   const withoutEarlierReasoning = (messages: any[]) => {
-    const last = messages.findLastIndex((m) => m.role === "assistant");
+    const steps = messages.filter((m) => m.role === "assistant");
+    const thinking = (m: any) => (m.content ?? []).reduce((n: number, b: any) => n + (b.type === "thinking" ? String(b.thinking ?? "").length : 0), 0);
+    const kept = steps.filter((m) => (m.timestamp ?? 0) > reasoningKeptAfter).reduce((n, m) => n + thinking(m), 0);
+    if (kept > REASONING_KEEP_MAX_CHARS && steps.length > 1) reasoningKeptAfter = Math.max(reasoningKeptAfter, steps.at(-2).timestamp ?? 0);
     let changed = false;
-    const out = messages.map((m, i) => {
-      if (m.role !== "assistant" || i === last || !m.content?.some((b: any) => b.type === "thinking")) return m;
+    const out = messages.map((m) => {
+      if (m.role !== "assistant" || (m.timestamp ?? 0) > reasoningKeptAfter || !m.content?.some((b: any) => b.type === "thinking")) return m;
       changed = true;
       return { ...m, content: m.content.filter((b: any) => b.type !== "thinking") };
     });
@@ -856,11 +907,7 @@ export default async function (pi: ExtensionAPI) {
     if (!cleared.length) return undefined;
     const stored = cleared.map(({ source, text }) => ({ source, text }));
     const task = textOf([...branch].reverse().find((m: any) => m.role === "user") ?? {});
-    const step = [...messages].reverse().find((m: any) => m.role === "assistant");
-    const knownFor = knownByCall(branch);
-    const stepCalls = (step?.content ?? []).filter((b: any) => b.type === "toolCall");
-    const stepText = step ? `${textOf(step)} ${stepCalls.map((b: any) => withoutGuesses(JSON.stringify(b.arguments), knownFor(b.id))).join(" ")}` : "";
-    const found = recall(stored, taskQueries(task, stepText), RECALL_MAX_CHARS);
+    const found = recall(stored, taskQueries(task), RECALL_MAX_CHARS);
     if (!found.length) return undefined;
     const byCall = new Map<string, string[]>();
     for (const p of found) {

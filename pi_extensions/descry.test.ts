@@ -82,6 +82,41 @@ test("a file or symbol name with control characters, an overlong name, or a non-
   }
 });
 
+test("descrySymbols waits while descry's embedding model loads, so the first search is not keyword-only", async () => {
+  // descry 1.1.0 answers keyword-only for about 10 s after starting while it loads its embedding model, and cadre's
+  // first search comes right after the session starts; its health report says when the model is ready.
+  const dir = mkdtempSync(join(tmpdir(), "cadre-descry-warm-"));
+  const bin = join(dir, "descry-mcp");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const started = Date.now();
+const ready = () => Date.now() - started > 600;
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\\n");
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === undefined) return;
+  const name = msg.params?.name;
+  if (msg.method === "initialize") return send({ jsonrpc: "2.0", id: msg.id, result: {} });
+  if (name === "descry_health") return send({ jsonrpc: "2.0", id: msg.id, result: { structuredContent: { features: { embeddings: ready(), embeddings_loading: !ready(), embeddings_error: null } } } });
+  if (name === "descry_search") {
+    const results = ready() ? [{ type: "Method", name: "email_verified", file: "auth/oidc_client.rs", line: 1058 }] : [{ type: "Class", name: "IdentityProvider", file: "auth/identity_provider.rs", line: 322 }];
+    return send({ jsonrpc: "2.0", id: msg.id, result: { structuredContent: { method: ready() ? "hybrid" : "keyword", results } } });
+  }
+  send({ jsonrpc: "2.0", id: msg.id, result: { structuredContent: {} } });
+});
+`,
+  );
+  chmodSync(bin, 0o755);
+  const server = DescryServer.start(bin, dir);
+  try {
+    const symbols = await descrySymbols(server, "which function decides whether the identity provider asserts that the email is verified?", 2000);
+    assert.match(symbols, /email_verified auth\/oidc_client\.rs:1058/);
+  } finally {
+    server.close();
+  }
+});
+
 test("starting the server asks descry to index or refresh the project", async () => {
   const { bin, dir, log } = fakeServer();
   const server = DescryServer.start(bin, dir);

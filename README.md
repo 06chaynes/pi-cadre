@@ -115,6 +115,11 @@ code, so none of this depends on the model remembering to do it:
   optional reranker running (`start_llama_server.sh -m reranker`), a cleared result keeps the passages it scores
   highest for the request item the call served; across 254 results that held an answer, the answer stayed in 238 this
   way and in 153 with line matching. Without it, line matching is used.
+- **The server's prompt cache stays useful.** Between clearing events each request starts with exactly what the previous
+  one sent, so llama-server reuses its cached prompt and processes only the new step: earlier steps' reasoning leaves,
+  and recalled passages change, only when clearing runs, and clearing then frees down to 60% of its room so it runs
+  rarely. On a large-repository write-up this cut prompt tokens processed from about 660k to about 160k, and both runs
+  finished where the previous version ran out of time.
 - **Searches carry what is known, not guesses.** A number in a search query that neither your request nor an earlier
   result contains is removed before the search runs, and such numbers never decide which parts of a result are kept.
   With a guessed year in the query, a search for the first iPhone's release year returned pages about a date bug and
@@ -126,8 +131,9 @@ code, so none of this depends on the model remembering to do it:
 - **Code symbols (optional).** When [descry](https://pypi.org/project/descry-codegraph/) is installed (`descry-mcp` on
   `PATH`, or `DESCRY_MCP_BIN`), each session starts its MCP server in the working directory and the system message
   lists the symbols matching the prompt (name and file:line). On a large Rust repository this took "which function, in
-  which file" questions from 33 to 36 of 36, with about half the tool calls. The first index of a large repository
-  takes a while; see descry's documentation for its settings. Only absolute `PATH` entries are searched, and on Windows
+  which file" questions from 33 to 36 of 36, with about half the tool calls. Install it with its embedding support
+  (`descry-codegraph[all]`); the first search waits for descry's embedding model to load. The first index of a large
+  repository takes a while; see descry's documentation for its settings. Only absolute `PATH` entries are searched, and on Windows
   the integration is not yet supported.
 - **Broken edits are reported.** After an edit or write, the file is parsed (Python, JavaScript, TypeScript, Rust, or
   Go, when the parser is installed) and a syntax error is reported in the same tool result.

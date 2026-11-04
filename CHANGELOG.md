@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.1]
+
+### Changed
+
+- The request prefix stays the same between clearing events, so llama-server reuses its cached prompt. Logged requests
+  of a large write-up showed three rebuild sources: stripping the previous step's reasoning on every request (the server
+  rebuilt that step and its result each time), clearing just enough to fit (5-8 clearing events, each rebuilding from
+  the first cleared result on), and recall passages chosen with the current step's words (they changed between requests
+  and rebuilt ~30k tokens with no clearing). Now clearing frees down to 60% of its room, earlier steps' reasoning leaves
+  only when clearing runs (or past 12,000 characters), and recall queries come from the task alone. Large-repository
+  write-up at 64k, 2 runs each: both runs finished (21 and ~25 min) against none; prompt tokens processed ~160k against
+  ~660k; rubric coverage 8 and 10 of 10 in each arm. Validation at the default 32k: research 12 and 13 of 14, coding
+  6/6 twice, exploration 10/10 twice, open research question answered twice.
+
+### Fixed
+
+- The source check judged circular support by the model's original query, but the query cleaner had already removed
+  the guessed number before the search ran: "2007" for the iPhone was flagged though the search never contained it.
+  Guesses are now read from the arguments as the call ran; a fetched URL that carries a guess still counts.
+- A number inside a fetched URL (`iphone-purchased-1978`) supported the same number as a claim; fetched URLs now support
+  only cited URLs.
+- A short answer line that refers to a listed item by number ("- Item 9: 299,792,458 m/s.") was flagged for lacking
+  topic words; it is now checked with that item's text. Wrong values on such lines stay flagged.
+- With descry 1.1, which answers keyword-only while its embedding model loads, cadre's first search ran during that
+  load: the expected function was in the symbol list for 5 of 12 navigation questions instead of 12. cadre now waits for
+  descry's health report to say the model is loaded (within its 15 s search budget).
+
 ## [0.3.0]
 
 ### Added

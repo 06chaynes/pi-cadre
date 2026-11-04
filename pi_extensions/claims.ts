@@ -121,12 +121,13 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
 
 /**
  * Claims in `answer` that no text in `sources` supports, each with the passage of `evidence` closest to its context.
- * Callers pass every text the answer may draw on as `sources` (tool results, saved originals, the user's messages) and
- * the retrieved material alone as `evidence`.
+ * Callers pass every text the answer may draw on as `sources` (tool results, saved originals, the user's messages), the
+ * retrieved material alone as `evidence`, and as `urls` addresses that support a cited URL and nothing else (pages a
+ * call fetched: a number inside such an address is not a fact the page states).
  */
-export function unsupportedClaims(answer: string, sources: readonly Source[], evidence: readonly string[] = sources.map(textOfSource)): Unsupported[] {
+export function unsupportedClaims(answer: string, sources: readonly Source[], evidence: readonly string[] = sources.map(textOfSource), urls: readonly string[] = []): Unsupported[] {
   const texts = sources.map(textOfSource);
-  const sourceUrls = new Set(texts.flatMap((s) => (s.match(URL) ?? []).map(normUrl)));
+  const sourceUrls = new Set([...texts.flatMap((s) => s.match(URL) ?? []), ...urls].map(normUrl));
   const sourceText = normText(texts.join("\n"));
   const numbers = sources.flatMap((src) => {
     const s = textOfSource(src);

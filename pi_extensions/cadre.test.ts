@@ -401,6 +401,12 @@ test("small results, notes already cleared, unfinished runs, and other providers
 });
 
 /** A task in progress: a request, then one read per turn with a `chars`-character result each. */
+/** An assistant step that reasoned, then read a file. */
+const thinkingCall = (id: string, thinking: string) => ({
+  ...toolCall(id, "read", { path: `${id}.py` }),
+  content: [{ type: "thinking", thinking }, { type: "toolCall", id, name: "read", arguments: { path: `${id}.py` } }],
+});
+
 function taskInProgress(...chars: number[]) {
   const messages: any[] = [{ role: "user", content: "Add a restock report to the inventory project and test it." }];
   chars.forEach((n, i) => messages.push(toolCall(`c${i}`, "read", { path: `f${i}.py` }), toolResult(`c${i}`, "read", `file ${i} ` + "x".repeat(n))));
@@ -434,6 +440,21 @@ test("with a larger Spark window, kept results use half of what it leaves, so re
   // (65,536 - 8,192 reply - 4,096 system) / 2 = 26,624 tokens; four seen results of about 6,000 tokens each fit.
   const task = taskInProgress(10_800, 10_800, 10_800, 10_800, 100);
   assert.equal(await calls.handlers["turn_end"](turnEnd(task), sessionContext([])), undefined);
+});
+
+test("when clearing has to run, it clears down to 60% of the room, so it runs less often", async () => {
+  // Each clearing makes the server rebuild the prompt from the first cleared result on; clearing only just enough made it
+  // run again a few steps later (5-8 clearing events per write-up, against 1-2 when clearing to 60%).
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  // Room 10,240 tokens; four seen results of about 3,000 tokens (12,240 > 10,240) leave at 60% (6,144): two stay.
+  const task = taskInProgress(5_400, 5_400, 5_400, 5_400, 100);
+  const seen = applyEdits(task.session, await calls.handlers["turn_end"](turnEnd(task), sessionContext([])));
+  assert.match(seen[2], /cleared from context/);
+  assert.match(seen[4], /cleared from context/);
+  assert.equal(seen[6].length, 5_407);
+  assert.equal(seen[8].length, 5_407);
 });
 
 test("during a task, results within the budget, other providers, and results already cleared are left alone", async () => {
@@ -647,25 +668,60 @@ test("passages of a result that compaction removed come back right after the sum
   assert.ok(!result.messages.some((m: any) => m.role === "user" && JSON.stringify(m.content).includes("41,024,320")));
 });
 
-test("reasoning from earlier steps leaves the request; the latest step keeps its own", async () => {
+test("between clearing events every step keeps its reasoning, so each request starts with the previous one", async () => {
+  // Stripping the previous step's reasoning on every request made the server rebuild that step and its result each
+  // time; reasoning now leaves only when clearing changes the context anyway.
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
-  const think = (id: string, thinking: string) => ({ ...toolCall(id, "read", { path: "a.py" }), content: [{ type: "thinking", thinking }, { type: "toolCall", id, name: "read", arguments: { path: "a.py" } }] });
   const { session } = realSession([
     { role: "user", content: "Fix the bug" },
-    think("c1", "STEP-ONE reasoning"),
+    thinkingCall("c1", "STEP-ONE reasoning"),
     toolResult("c1", "read", "x = 1"),
-    think("c2", "STEP-TWO reasoning"),
+    thinkingCall("c2", "STEP-TWO reasoning"),
     toolResult("c2", "read", "y = 2"),
   ]);
-  const messages = session.buildSessionContext().messages;
-  const result = await calls.handlers["context"]({ type: "context", messages }, toolContext(session));
-  const text = JSON.stringify(result.messages);
-  assert.doesNotMatch(text, /STEP-ONE reasoning/);
+  const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+  const text = JSON.stringify(result?.messages ?? session.buildSessionContext().messages);
+  assert.match(text, /STEP-ONE reasoning/);
   assert.match(text, /STEP-TWO reasoning/);
-  assert.equal(result.messages[1].content.length, 1, "the earlier step keeps its tool call");
+});
+
+test("when clearing runs, reasoning of the steps up to then leaves with the cleared results; later steps keep theirs", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const big = (i: number) => `file ${i} ` + "x".repeat(10_800);
+  const { session, ids } = realSession([
+    { role: "user", content: "Add a restock report to the inventory project and test it." },
+    thinkingCall("c0", "STEP-ZERO reasoning"),
+    toolResult("c0", "read", big(0)),
+    thinkingCall("c1", "STEP-ONE reasoning"),
+    toolResult("c1", "read", big(1)),
+    thinkingCall("c2", "STEP-TWO reasoning"),
+    toolResult("c2", "read", big(2)),
+  ]);
+  applyEdits(session, await calls.handlers["turn_end"](boundary(session, { type: "turn_end", toolResultEntryIds: [ids[6]] }), sessionContext([])));
+  session.appendMessage({ ...thinkingCall("c3", "STEP-THREE reasoning"), timestamp: Date.now() + 1000 } as any);
+  const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+  const text = JSON.stringify(result.messages);
+  assert.doesNotMatch(text, /STEP-ZERO reasoning|STEP-ONE reasoning|STEP-TWO reasoning/);
+  assert.match(text, /STEP-THREE reasoning/);
   assert.match(JSON.stringify(session.buildSessionContext().messages), /STEP-ONE reasoning/, "the session itself is unchanged");
+});
+
+test("reasoning kept between clearing events is bounded: past its budget, earlier steps' reasoning leaves", async () => {
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const messages: any[] = [{ role: "user", content: "Fix the bug" }];
+  for (let i = 0; i < 12; i++) messages.push(thinkingCall(`c${i}`, `STEP-${i} ` + "r".repeat(2_000)), toolResult(`c${i}`, "read", "small"));
+  const { session, ids } = realSession(messages);
+  await calls.handlers["turn_end"](boundary(session, { type: "turn_end", toolResultEntryIds: [ids.at(-1)] }), sessionContext([]));
+  const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+  const text = JSON.stringify(result.messages);
+  assert.doesNotMatch(text, /STEP-0 /);
+  assert.match(text, /STEP-11 /, "the latest step keeps its reasoning");
 });
 
 test("an oversized search result keeps every hit, a cut read says how to see more, and huge text is cut before counting", async () => {
@@ -895,16 +951,38 @@ test("a value no source supports gets one corrective step naming it and quoting 
   assert.equal(right?.continue, undefined, "supported values, and quotes of the system prompt, pass");
 });
 
-test("a value found only through a search that already guessed it gets a corrective step that says so", async () => {
+test("a short line that refers to a listed item by number is checked against sources about that item", async () => {
+  // After a corrective step the model summarised "- Item 9: 299,792,458 m/s."; the line has no topic words, so the
+  // check flagged values its sources state, the speed of light among them.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Research each of these:\n1. The melting point of tungsten in degrees Celsius.\n2. The speed of light in a vacuum in metres per second.";
+  const settle = async (final: string) => {
+    const { session } = realSession([
+      { role: "user", content: prompt },
+      toolCall("s1", "web_search", { queries: ["tungsten melting point", "speed of light vacuum"] }),
+      toolResult("s1", "web_search", "Tungsten has the highest melting point of all metals, 3422 °C.\n\nThe speed of light in a vacuum is exactly 299,792,458 metres per second."),
+      answer(final),
+    ]);
+    await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+    return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  };
+  assert.equal((await settle("Results:\n- **Item 1**: 3422 °C.\n2. 299,792,458 m/s."))?.continue, undefined);
+  // A value the item's sources do not state is still named.
+  assert.match((await settle("Results:\n- **Item 1**: 3410 °C."))?.entries[0].content, /3410 \(in "/);
+});
+
+test("a value found only through a call that carried it as a guess gets a corrective step that says so", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
   const prompt = "Research the year the first iPhone was released and write research.md.";
-  const settle = async (query: string) => {
+  const settle = async (call: ReturnType<typeof toolCall>) => {
     const session = realSession([
       { role: "user", content: prompt },
-      toolCall("s1", "web_search", { queries: [query] }),
-      toolResult("s1", "web_search", "My iPhone says it was purchased on April 1 1978; the 1978 date is a placeholder for AS IS iPhones."),
+      call,
+      toolResult(call.content[0].id, call.content[0].name, "My iPhone says it was purchased on April 1 1978; the 1978 date is a placeholder for AS IS iPhones."),
       toolCall("w1", "write", { path: "research.md", content: "| First iPhone released | 1978 |\n" }),
       toolResult("w1", "write", "Successfully wrote to research.md"),
       answer("Done."),
@@ -912,10 +990,13 @@ test("a value found only through a search that already guessed it gets a correct
     await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
     return calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session, getSystemPrompt: () => "" });
   };
-  const guessed = await settle("first iPhone release year 1978 Apple");
+  // A fetched URL ran with the guess in it, so its page cannot confirm the guess.
+  const guessed = await settle(toolCall("f1", "fetch_content", { url: "https://forum.example/iphone-purchased-1978" }));
   assert.equal(guessed.continue, true);
   assert.match(guessed.entries[0].content, /research\.md: 1978 .* appears only in results of a search that already contained it/);
-  assert.equal((await settle("first iPhone release year"))?.continue, undefined, "found by a search that did not contain it");
+  // A search query loses guessed numbers before it runs (the session keeps the model's original), so its results count.
+  assert.equal((await settle(toolCall("s1", "web_search", { queries: ["first iPhone release year 1978 Apple"] })))?.continue, undefined, "the search ran without 1978");
+  assert.equal((await settle(toolCall("s2", "web_search", { queries: ["first iPhone release year"] })))?.continue, undefined);
 });
 
 test("a question about the world answered without any source gets one step asking for a search", async () => {
@@ -975,21 +1056,23 @@ process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.lo
   chmodSync(bin, 0o755);
   process.env.DESCRY_MCP_BIN = bin;
   const calls = () => readFileSync(join(dir, "calls.log"), "utf8");
+  serveProps({});
+  const { pi, calls: hooks } = fakePi();
+  await extension(pi as any);
+  const ctx = { ...uiContext(true).ctx, cwd: dir };
   try {
-    serveProps({});
-    const { pi, calls: hooks } = fakePi();
-    await extension(pi as any);
-    const ctx = { ...uiContext(true).ctx, cwd: dir };
     await hooks.handlers["session_start"]({ reason: "new" }, ctx);
     await hooks.handlers["before_agent_start"]({ messageType: "user", prompt: "Where is the redirect limit enforced?" }, ctx);
     const system = { role: "system", content: "Pi system prompt" };
     await hooks.handlers["context_with_system"]({ messages: [system] });
     assert.match(system.content, /Code symbols matching the request \(from descry\):\nresolve_redirects requests\/sessions\.py:159/);
-    assert.match(calls(), /^initialize\nnotifications\/initialized\ndescry_ensure\ndescry_search$/m);
+    assert.match(calls(), /^initialize\nnotifications\/initialized\ndescry_ensure\ndescry_health\ndescry_search$/m);
     await hooks.handlers["session_shutdown"]({}, ctx);
     for (let i = 0; i < 50 && !calls().includes("stopped"); i++) await new Promise((r) => setTimeout(r, 20));
     assert.match(calls(), /stopped/);
   } finally {
+    // A failed assertion must not leave the server running, or the test file never exits.
+    await hooks.handlers["session_shutdown"]({}, ctx);
     if (saved === undefined) delete process.env.DESCRY_MCP_BIN;
     else process.env.DESCRY_MCP_BIN = saved;
   }
@@ -1047,6 +1130,41 @@ test("an edit that leaves a file unparseable is reported in the same tool result
   assert.equal(await calls.handlers["tool_result"](event, { ...uiContext(true).ctx, cwd }), undefined);
 });
 
+test("recalled passages depend on the task, not on the current step, so they stay the same from one request to the next", async () => {
+  // Passages chosen with the current step's words changed between requests and made the server rebuild the prompt from
+  // the first cleared result on, about 30k tokens, with no clearing at all.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "Write docs/roles.md explaining how roles are granted, how mappings are revoked, and how a failed sync is recorded.";
+  const page = [
+    "Roles are granted by apply_role_mappings when a user logs in; the grant records the mapping that made it.",
+    "filler ".repeat(200),
+    "Mappings are revoked by revoke_grants_from_mapping, which withdraws every grant the mapping made.",
+    "filler ".repeat(200),
+    "Tokio runtime workers poll futures; the scheduler steals tasks between worker threads when queues run dry.",
+  ].join("\n\n");
+  const build = (step: string) => {
+    const { session, ids } = realSession([
+      { role: "user", content: prompt },
+      toolCall("f1", "fetch_content", { url: "https://docs.example/roles" }),
+      toolResult("f1", "fetch_content", page),
+      { ...toolCall("s1", "bash", { command: step }), content: [{ type: "text", text: step }, { type: "toolCall", id: "s1", name: "bash", arguments: { command: step } }] },
+    ]);
+    session.appendContextEdit(ids[2], { content: "[fetch_content result cleared]" });
+    return session;
+  };
+  const restored = async (step: string) => {
+    const session = build(step);
+    const result = await calls.handlers["context"]({ type: "context", messages: session.buildSessionContext().messages }, toolContext(session));
+    return JSON.stringify(result?.messages?.[2]?.content ?? []);
+  };
+  const a = await restored("rg -n revoke src");
+  const b = await restored("rg -n 'tokio runtime workers scheduler steals' src");
+  assert.match(a, /revoke_grants_from_mapping/);
+  assert.equal(a, b);
+});
+
 test("any extension's tool results are recalled (here pi-web-access's fetch_content)", async () => {
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
@@ -1065,7 +1183,7 @@ test("cleared local reads and command output are recalled while unchanged, so a 
   serveProps({ 8080: 32768, 8081: 16384 });
   const { pi, calls } = fakePi();
   await extension(pi as any);
-  const prompt = "Write docs/idp-roles.md explaining where group-to-role mappings are applied at login. Name the functions and files.";
+  const prompt = "Write docs/idp-roles.md explaining where group-to-role mappings are applied at login. Name the functions and files. Give the line where apply_role_mappings is defined in auth_oidc.rs.";
   const code = "fn other() {}\n\n".repeat(200) + "/// Applies an identity provider's group-to-role mappings to a user at login.\npub async fn apply_role_mappings(user: &User) {}\n\n" + "fn more() {}\n\n".repeat(200);
   const grep = "mandible/src/routes/auth_oidc.rs:1430: pub async fn apply_role_mappings(user: &User) -> Result<()> at login";
   const build = (later: any[]) => {
