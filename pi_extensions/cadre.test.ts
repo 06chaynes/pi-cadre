@@ -1056,21 +1056,23 @@ process.on("SIGTERM", () => { require("node:fs").appendFileSync("${dir}/calls.lo
   chmodSync(bin, 0o755);
   process.env.DESCRY_MCP_BIN = bin;
   const calls = () => readFileSync(join(dir, "calls.log"), "utf8");
+  serveProps({});
+  const { pi, calls: hooks } = fakePi();
+  await extension(pi as any);
+  const ctx = { ...uiContext(true).ctx, cwd: dir };
   try {
-    serveProps({});
-    const { pi, calls: hooks } = fakePi();
-    await extension(pi as any);
-    const ctx = { ...uiContext(true).ctx, cwd: dir };
     await hooks.handlers["session_start"]({ reason: "new" }, ctx);
     await hooks.handlers["before_agent_start"]({ messageType: "user", prompt: "Where is the redirect limit enforced?" }, ctx);
     const system = { role: "system", content: "Pi system prompt" };
     await hooks.handlers["context_with_system"]({ messages: [system] });
     assert.match(system.content, /Code symbols matching the request \(from descry\):\nresolve_redirects requests\/sessions\.py:159/);
-    assert.match(calls(), /^initialize\nnotifications\/initialized\ndescry_ensure\ndescry_search$/m);
+    assert.match(calls(), /^initialize\nnotifications\/initialized\ndescry_ensure\ndescry_health\ndescry_search$/m);
     await hooks.handlers["session_shutdown"]({}, ctx);
     for (let i = 0; i < 50 && !calls().includes("stopped"); i++) await new Promise((r) => setTimeout(r, 20));
     assert.match(calls(), /stopped/);
   } finally {
+    // A failed assertion must not leave the server running, or the test file never exits.
+    await hooks.handlers["session_shutdown"]({}, ctx);
     if (saved === undefined) delete process.env.DESCRY_MCP_BIN;
     else process.env.DESCRY_MCP_BIN = saved;
   }

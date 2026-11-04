@@ -25,6 +25,8 @@ const safeName = (value: unknown): value is string => typeof value === "string" 
 const PROTOCOL_VERSION = "2025-06-18";
 // The first search after startup waits for the embedding model (about 9 s on a 4B-model machine); later ones are fast.
 const SEARCH_TIMEOUT_MS = 15_000;
+// How often to ask descry whether its embedding model has loaded.
+const HEALTH_POLL_MS = 250;
 
 /**
  * The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH; undefined when neither is there. Only
@@ -134,7 +136,15 @@ export class DescryServer {
 export async function descrySymbols(server: DescryServer, prompt: string, maxChars: number, timeoutMs = SEARCH_TIMEOUT_MS): Promise<string> {
   const terms = keywords(prompt).slice(0, MAX_TERMS);
   if (!terms.length) return "";
-  const found = await server.call("descry_search", { terms, limit: MAX_RESULTS, exclude_tests: true }, timeoutMs);
+  // descry 1.1+ answers keyword-only while its embedding model loads (about 10 s after starting); cadre's first search
+  // comes right after the session starts, so it waits, within the same budget, while the health report says loading.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const health = await server.call("descry_health", {}, Math.max(1, deadline - Date.now()));
+    if (health?.features?.embeddings_loading !== true) break;
+    await new Promise((resolve) => setTimeout(resolve, HEALTH_POLL_MS));
+  }
+  const found = await server.call("descry_search", { terms, limit: MAX_RESULTS, exclude_tests: true }, Math.max(1, deadline - Date.now()));
   const lines = [HEADING];
   let used = HEADING.length;
   for (const r of found?.results ?? []) {
