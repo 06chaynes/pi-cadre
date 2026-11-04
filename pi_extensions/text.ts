@@ -15,7 +15,9 @@ const STOPWORDS = new Set(
  * acronyms written in capitals (ML, AI, 3D), without stopwords.
  */
 export function terms(text: string): string[] {
-  const words = text.match(/\b[A-Z0-9]*[A-Z][A-Z0-9]*\b|[A-Za-z0-9]+/g) ?? [];
+  // One linear scan: a capitals-first alternative before it matched the same runs but backtracked quadratically on a
+  // long run of capitals (a web page), and gave identical words on every saved session's text.
+  const words = text.match(/[A-Za-z0-9]+/g) ?? [];
   return words
     .filter((word) => word.length >= 3 || (word.length === 2 && word === word.toUpperCase() && /[A-Z]/.test(word)))
     .map((word) => word.toLowerCase())
@@ -87,4 +89,20 @@ export function guesses(text: string, known: string): string[] {
 export function withoutGuesses(text: string, known: string): string {
   const flat = known.replace(/,/g, "");
   return text.replace(NUMBER, (match, _space, n: string) => (flat.includes(n.replace(/,/g, "")) ? match : ""));
+}
+
+// Longest file or symbol name cadre puts in the system message; names come from the project, which may not be trusted.
+const MAX_NAME_CHARS = 200;
+// Control characters (newlines among them) and line or paragraph separators in a file or symbol name would put the
+// project's own lines into the system message.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/** Whether a name from the project (a file or symbol name) is safe to list in the system message. */
+export function safeName(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_NAME_CHARS && !CONTROL.test(value);
+}
+
+/** Whether a relative path from the project is safe to list: every part (split at a slash or backslash) a safe name. */
+export function safePath(value: unknown): value is string {
+  return typeof value === "string" && value.split(/[\\/]/).every(safeName);
 }

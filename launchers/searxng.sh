@@ -116,6 +116,6 @@ case "${1:-}" in
   setup) setup ;;
   status) status ;;
   teardown) teardown "${2:-}" ;;
-  -h|--help|"") sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|"") awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0" ;;
   *) die "unknown command '$1' (setup|status|teardown)" ;;
 esac

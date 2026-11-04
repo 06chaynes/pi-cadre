@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.2]
+
+### Security
+
+- The path guard checks a file tool's path as Pi opens it: `~`, a leading `@`, `file://` URLs, Unicode spaces and (on
+  Windows) MSYS drive paths are expanded first (`~/.bashrc` passed as a project file), `..` applies before symlinks
+  (Pi resolves the path as text, so a project link followed by `..` reached outside), and a read is checked under the
+  spelling Pi's read opens when the path as written is missing (`'` as U+2019, ` AM.`/` PM.`, NFD).
+- Passages a source-check note quotes from web pages, and errors of failed calls, reach the model as a tool result
+  (`cadre_sources`) before the note instead of inside it; the note goes to the model as a user turn. Exact replays of
+  the step after a note: the model acted on it in 57 of 60 samples against 52, and went after the flagged item as
+  often as before.
+- The in-code digest carries only earlier compaction or branch summaries, not cadre's own notes (which quoted web
+  text), and text carried into it cannot close the `<summary>` tag Pi wraps it in.
+- A file name with control characters (a newline among them) never reaches the project map, in or outside git.
+- Linear time on text from web pages and projects: search terms (a long run of capitals took 2.4 s at 40,000
+  characters), a blocked search's file-name suggestions (a wildcard pattern took 132 s), trailing punctuation after a
+  URL (80,000 dots took 10 s), the path pattern of the source check (a 200,000-letter word took 63 s), relative link
+  targets on fetched pages (24 s), the closing punctuation of a listed item (18 s), and the file-name pattern that
+  classifies a prompt (200,000 characters of hyphen- or dot-joined words in a pasted prompt took up to 250 s).
+
+### Changed
+
+- The README recommends descry and gives its install line (`uv tool install 'descry-codegraph[all]'`).
+
+### Fixed
+
+- Windows launchers, checked case by case against the shell scripts on a Windows Server 2022 VM:
+  `start_llama_server.bat -m dual` (or dual mode with any flag) started nothing, because `shift` also moves `%0` and
+  the script relaunched a file named after the last flag; it now keeps its own path. It also gains what the shell
+  script and README already offered: `-h`/`--help`, the long flags, and arguments after `--` (`-- --device <name>`).
+  Errors go to stderr. `searxng.bat` prints its header as help (it printed internal comments and `^|`) and generates
+  the SearXNG secret with a cryptographic generator instead of `Get-Random`.
+- Shell launchers: dual mode passes `-ngl` to both servers (each reread the config and dropped it) and exits 0 when
+  both servers exit cleanly; a `.GGUF` path in capitals counts as a local file, as on Windows; `searxng.sh --help` no
+  longer prints `set -euo pipefail`.
+- descry runs on Windows: pip and uv install its server as `descry-mcp.exe`, which cadre did not look for, so Windows
+  sessions ran without it. Checked on the Windows Server 2022 VM: cadre's MCP calls against `descry-mcp.exe` index,
+  load embeddings and return symbols.
+- Arguments after `--` reach llama-server unchanged on Windows, in both modes: values with `=`, `,` or `;` were split,
+  and in dual mode a quoted `&` or `)` broke the command.
+- A file deep in the tree (a relative path over 200 characters, with / or \\) stays in the project map and descry's
+  symbols.
+- The research check stays quiet when the guard blocked a call on a path the prompt names ("Show me what is in
+  ../../.zshrc"): after the guard blocked the reads and the model said so, the check asked for web sources and Spark
+  searched about sandboxes for seven minutes. Decided from the session, not from the prompt's wording.
+- A quotation of a fetched page matches it when the page writes the quoted words as Markdown links ("[Ruth
+  Chepng'etich](url)"): the source check named correct Wikipedia quotes, and the model spent minutes re-verifying them.
+  Over 227 saved answers this removes two quote flags (both such cases) and adds none.
+- A path-guard block starts with "Blocked:". LFM3 presented the block text as the file's contents ("Here's what's in
+  each file") in 8 of 10 exact replays of a blocked read; with the prefix, in none (Spark answered correctly 10 of 10
+  either way).
+- A tool result cadre inserts (recall after compaction, a source check's passages) has an ID made from its content,
+  so the server's prompt cache is reused.
+- `tests/test_launchers.py` runs the launchers of the platform it is on (CI covers Linux, macOS and Windows) with
+  stand-ins for llama-server and pi, against the same expected calls.
+
 ## [0.3.1]
 
 ### Changed

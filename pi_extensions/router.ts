@@ -24,6 +24,11 @@ const LOCAL_REFERENCE = new RegExp(
   ].join("|"),
 );
 
+// A run of path characters this long is no file name. The file-name pattern starts again after every hyphen or dot of
+// a run and scans the rest of it, so runs are removed before it is tested: a pasted 200,000-character run took 250 s.
+const LONG_RUN = /[\w.-]{256,}/g;
+const localReference = (text: string) => LOCAL_REFERENCE.test(text.replace(LONG_RUN, " "));
+
 // Asking outright for research, whatever else the prompt names (a research.md to write, for instance).
 const RESEARCH_REQUEST = /\b(research|look up|search (the )?(web|online|internet))\b/i;
 
@@ -34,7 +39,7 @@ const isQuestion = (text: string) => QUESTION_START.test(text) || text.endsWith(
 /** Whether a prompt asks about the world rather than local code: a question with no local reference, or a research request. */
 export function researchQuestion(prompt: string): boolean {
   const text = prompt.trim();
-  return RESEARCH_REQUEST.test(text) || (isQuestion(text) && !CHANGE.test(text) && !LOCAL_REFERENCE.test(text));
+  return RESEARCH_REQUEST.test(text) || (isQuestion(text) && !CHANGE.test(text) && !localReference(text));
 }
 
 /** Picks the model for a user prompt. */
@@ -43,7 +48,7 @@ export function chooseModel(prompt: string): ModelChoice {
   if (text.length > MAX_LFM3_PROMPT) return "spark";
   if (SMALL_EDIT.test(text) && !MULTI_STEP.test(text)) return "lfm3";
   // Questions without a local reference may need research; LFM3 wrote poor search queries for those.
-  return isQuestion(text) && !CHANGE.test(text) && LOCAL_REFERENCE.test(text) ? "lfm3" : "spark";
+  return isQuestion(text) && !CHANGE.test(text) && localReference(text) ? "lfm3" : "spark";
 }
 
 /** Text of the last user message, with text blocks joined by newlines. */

@@ -53,6 +53,30 @@ test("writes and edits stay inside the project", () => {
   assert.ok(guard("edit", { path: "../other/a.py" }));
 });
 
+test("a blocked search with many wildcards finds matching project files quickly", () => {
+  // The suggestion turned each pattern into a regex; ten '*'s against a 200-character file name backtracked for 132 s.
+  const dir = mkdtempSync(join(tmpdir(), "cadre-glob-"));
+  writeFileSync(join(dir, "a".repeat(200)), "");
+  writeFileSync(join(dir, "store.py"), "");
+  const started = Date.now();
+  guardReason("bash", { command: "find / -name '" + "*a".repeat(10) + "*b'" }, dir, "/home/nobody");
+  assert.ok(Date.now() - started < 500, `${Date.now() - started} ms`);
+  assert.match(guardReason("bash", { command: "find / -name 's?ore.*'" }, dir, "/home/nobody") ?? "", /Project files matching: store\.py/);
+  assert.match(guardReason("bash", { command: "find / -iname 'STORE.PY'" }, dir, "/home/nobody") ?? "", /Project files matching: store\.py/);
+  assert.doesNotMatch(guardReason("bash", { command: "find / -name 'store.p'" }, dir, "/home/nobody") ?? "", /Project files matching/);
+});
+
+test("a path Pi's tools rewrite (~, @, file://) is checked as Pi will use it", () => {
+  // Pi's read, write and edit tools expand ~, strip a leading @ and convert file:// URLs before opening the file; the
+  // guard checked the path as written and let "~/.bashrc" through as a project file.
+  const outside = [`~/.bashrc`, `~`, `@${HOME}/.zshrc`, `@~/.ssh/id_rsa`, `file://${HOME}/.zshrc`, `\u00a0~/.bashrc`.trim(), `~/.ssh/id_rsa`];
+  for (const path of outside) {
+    assert.ok(guardReason("write", { path }, CWD, HOME), `write ${path}`);
+    assert.ok(guardReason("read", { path }, CWD, HOME), `read ${path}`);
+  }
+  for (const path of [`@src/app.py`, `file://${CWD}/src/app.py`, `@${CWD}/notes.md`]) assert.equal(guardReason("write", { path }, CWD, HOME), undefined, path);
+});
+
 test("reads may use system directories but nothing else outside the project", () => {
   assert.equal(guard("read", { path: "/etc/hosts" }), undefined);
   assert.equal(guard("ls", {}), undefined);
@@ -85,10 +109,49 @@ test("resolves dangling links, '..' after a link, and loops the way the OS does"
   symlinkSync(join(base, "Other", "deep"), join(cwd, "linked"));
   symlinkSync("loop", join(cwd, "loop"));
   assert.ok(guardReason("write", { path: "dangling.py" }, cwd, base));
-  assert.ok(guardReason("write", { path: "linked/../escaped.py" }, cwd, base));
   assert.ok(guardReason("bash", { command: "cat linked/../../secret" }, cwd, base));
   assert.ok(guardReason("write", { path: "loop/x" }, cwd, base));
   assert.equal(guardReason("write", { path: "sub/../ok.py" }, cwd, base), undefined);
+});
+
+test("a file tool's '..' applies before symlinks, as Pi resolves the path before opening it", () => {
+  // Pi's file tools resolve the path lexically against the working directory, then open the result: a link followed
+  // by '..' does not lead where the link points. The OS order (link first) let "current/../../.bashrc" through while Pi
+  // wrote the home directory's .bashrc.
+  const { base, cwd } = tempTree();
+  mkdirSync(join(cwd, "releases", "v1", "build"), { recursive: true });
+  symlinkSync(join(cwd, "releases", "v1", "build"), join(cwd, "current"));
+  symlinkSync(join(base, "Other", "deep"), join(cwd, "linked"));
+  assert.ok(guardReason("write", { path: "current/../../.bashrc" }, cwd, base));
+  assert.ok(guardReason("read", { path: "current/../../.bashrc" }, cwd, base));
+  assert.equal(guardReason("write", { path: "linked/../inside.py" }, cwd, base), undefined);
+});
+
+test("a read is checked under the other spelling Pi opens when the path is missing", () => {
+  // Pi's read falls back to the path with ' as \u2019, " AM."/" PM." with a narrow no-break space, and NFD: a link
+  // named x\u2019y in the project made read "x'y/..." open the link's target outside the project.
+  const { base, cwd } = tempTree();
+  writeFileSync(join(base, "Other", "secret"), "");
+  symlinkSync(join(base, "Other"), join(cwd, "x\u2019y"));
+  symlinkSync(join(base, "Other"), join(cwd, "Shot 1.02\u202fPM.dir"));
+  symlinkSync(join(base, "Other"), join(cwd, "cafe\u0301"));
+  assert.ok(guardReason("read", { path: "x'y/secret" }, cwd, base));
+  assert.ok(guardReason("read", { path: "Shot 1.02 PM.dir/secret" }, cwd, base));
+  assert.ok(guardReason("read", { path: "caf\u00e9/secret" }, cwd, base));
+  assert.equal(guardReason("read", { path: "sub/it's 1 PM.txt" }, cwd, base), undefined);
+});
+
+test("a project under a directory with ' or ' AM.' in its name can still be read", () => {
+  // Pi tries the other spellings only when the path is missing, and opens the first that exists; checking spellings
+  // that do not exist blocked every read in such a project.
+  for (const name of ["o'brien", "shot 9 AM.", "jos\u00e9"]) {
+    const base = mkdtempSync(join(tmpdir(), "cadre-Base-"));
+    const cwd = join(base, name, "proj");
+    mkdirSync(cwd, { recursive: true });
+    writeFileSync(join(cwd, "a.txt"), "");
+    assert.equal(guardReason("read", { path: "a.txt" }, cwd, base), undefined, name);
+    assert.equal(guardReason("read", { path: "missing.txt" }, cwd, base), undefined, name);
+  }
 });
 
 test("compares paths in on-disk case on case-insensitive file systems", (t) => {
@@ -106,6 +169,9 @@ test("a block says the way forward: project paths, and web_search for informatio
   const reason = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me")!;
   assert.match(reason, /Paths inside the project work: relative paths start at \/work\/inv\./);
   assert.match(reason, /For information from the web, use web_search\./);
+  // LFM3 presented the block text as the file's contents ("Here's what's in each file") in 8 of 10 exact replays;
+  // starting with "Blocked:" it did so in 0 of 10, and Spark answered correctly 10 of 10 either way.
+  assert.match(reason, /^Blocked: bash reaches /);
 });
 
 test("a blocked search for a name lists the project files with that name, without running the command", () => {

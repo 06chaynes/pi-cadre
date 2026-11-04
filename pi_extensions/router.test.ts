@@ -137,3 +137,23 @@ test("product names in camel case (iPhone, eBay, macOS) do not make a question l
     assert.equal(chooseModel(prompt), "lfm3", prompt);
   }
 });
+
+test("researchQuestion takes linear time on long pasted runs of dots and hyphens", () => {
+  // The file-name pattern could start after every hyphen or dot and scanned the rest each time: 200,000 characters of
+  // "a-" took 250 s, of "a.-" 27 s.
+  for (const run of ["a-", "a.-", "-a.", "x.1", "a.co."]) {
+    const started = Date.now();
+    researchQuestion(`What is ${run.repeat(Math.ceil(200_000 / run.length))}?`);
+    assert.ok(Date.now() - started < 1000, `${run}: ${Date.now() - started} ms`);
+  }
+  // Runs just short of the length that removes them, many times over.
+  const started = Date.now();
+  researchQuestion(`What is ${`${"a.-".repeat(85)} `.repeat(800)}?`);
+  assert.ok(Date.now() - started < 1000, `short runs: ${Date.now() - started} ms`);
+});
+
+test("file names whose first part is one character are local, as in 0.3.1", () => {
+  for (const prompt of ["What is in a.config.json?", "What does v.1.config.yaml set?", "Is e.g.main.py used?"]) {
+    assert.equal(researchQuestion(prompt), false, prompt);
+  }
+});

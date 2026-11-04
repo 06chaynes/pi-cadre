@@ -8,7 +8,7 @@ if exist "%PROJECT_DIR%\cadre_config.env" (
 )
 
 where pi >nul 2>nul || (
-    echo pi not found in PATH. Run: python setup_wizard.py
+    >&2 echo pi not found in PATH. Run: python setup_wizard.py
     exit /b 1
 )
 

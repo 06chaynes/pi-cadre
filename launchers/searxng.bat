@@ -1,7 +1,7 @@
 @echo off
 rem Local SearXNG search for Pi web tools (pi-web-access), in Docker, reachable only from this machine.
 rem
-rem Usage: launchers\searxng.bat setup^|status^|teardown [--purge]
+rem Usage: launchers\searxng.bat setup|status|teardown [--purge]
 rem   setup     write the config (once) and start the container, then wait until it answers
 rem   status    container state and which search engines answered a test query
 rem   teardown  stop and remove the container; --purge also deletes the config directory
@@ -23,18 +23,21 @@ if "%~1"=="teardown" goto :teardown
 if "%~1"=="" goto :help
 if "%~1"=="-h" goto :help
 if "%~1"=="--help" goto :help
-echo searxng: unknown command '%~1' (setup^|status^|teardown) 1>&2
+>&2 echo searxng: unknown command '%~1' (setup^|status^|teardown)
 exit /b 1
 
 :help
-for /f "skip=1 tokens=1,* delims= " %%a in ('findstr /b "rem" "%~f0"') do (
-  if "%%a"=="rem" echo(%%b
+rem Prints the header: the "rem" lines after the first line, up to the first other line.
+set "DONE="
+for /f "usebackq skip=1 delims=" %%l in ("%~f0") do if not defined DONE (
+  set "LINE=%%l"
+  if /i "!LINE:~0,3!"=="rem" (echo(!LINE:~4!) else set "DONE=1"
 )
 exit /b 0
 
 :need_docker
-where docker >nul 2>&1 || (echo searxng: docker is not installed ^(https://docs.docker.com/get-docker/^) 1>&2 & exit /b 1)
-docker info >nul 2>&1 || (echo searxng: the Docker daemon is not running; start Docker Desktop and retry 1>&2 & exit /b 1)
+where docker >nul 2>&1 || (>&2 echo searxng: docker is not installed ^(https://docs.docker.com/get-docker/^)& exit /b 1)
+docker info >nul 2>&1 || (>&2 echo searxng: the Docker daemon is not running; start Docker Desktop and retry& exit /b 1)
 exit /b 0
 
 :answering
@@ -46,7 +49,7 @@ exit /b 0
 :write_config
 if exist "%SEARXNG_CONFIG_DIR%\settings.yml" exit /b 0
 if not exist "%SEARXNG_CONFIG_DIR%" mkdir "%SEARXNG_CONFIG_DIR%"
-for /f "usebackq delims=" %%s in (`powershell -NoProfile -Command "-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })"`) do set "SECRET=%%s"
+for /f "usebackq delims=" %%s in (`powershell -NoProfile -Command "$b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString('x2') })"`) do set "SECRET=%%s"
 rem JSON output is what Pi web tools read. The engines below answered in testing; Brave and DuckDuckGo often
 rem rate-limit or show a CAPTCHA to frequent automated queries.
 (
@@ -87,7 +90,7 @@ for /l %%i in (1,1,60) do (
   if defined ENGINES goto :up
   timeout /t 3 /nobreak >nul
 )
-echo searxng: SearXNG did not answer; see: docker logs %SEARXNG_CONTAINER% 1>&2
+>&2 echo searxng: SearXNG did not answer; see: docker logs %SEARXNG_CONTAINER%
 exit /b 1
 :up
 echo SearXNG is up on %URL% (answering engines: %ENGINES%).

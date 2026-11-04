@@ -5,14 +5,55 @@
  * written in them, so the guard catches mistakes rather than enforcing a sandbox.
  */
 
-import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const SHELL_WORD_BREAKS = /[\s;|&()<>'"`=]+/;
 const SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/dev", "/proc", "/sys", "/nix", "/System", "/Library"];
 const MAX_LINKS = 40;
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+/** How a block's reason starts: LFM3 presented an unmarked block as the file's contents. */
+export const BLOCKED = "Blocked: ";
+
+/**
+ * `path` as Pi's file tools will open it (Pi 1.4's normalizePath, used by read, write, edit, grep, find and ls):
+ * Unicode spaces made plain, a leading "@" dropped, MSYS-style drive paths converted on Windows, "~" expanded, and a
+ * file:// URL turned into its path. The guard must check this, not the path as written: "~/.bashrc" passed as a project
+ * file while Pi wrote the home directory's.
+ */
+function asPiOpens(path: string, home: string): string {
+  let p = path.replace(UNICODE_SPACES, " ");
+  if (p.startsWith("@")) p = p.slice(1);
+  if (process.platform === "win32") {
+    const drive = !p.startsWith("//") && !p.includes("\\") ? p.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i) : null;
+    if (drive) p = `${drive[1].toUpperCase()}:\\${drive[2]?.replaceAll("/", "\\") ?? ""}`;
+  }
+  if (p === "~") return home;
+  if (p.startsWith("~/") || (process.platform === "win32" && p.startsWith("~\\"))) return join(home, p.slice(2));
+  if (/^file:\/\//.test(p)) {
+    try {
+      return fileURLToPath(p);
+    } catch {
+      return "/";
+    }
+  }
+  return p;
+}
+
+/**
+ * The path Pi's read opens for `path` (Pi 1.4's resolveReadPath): `path` itself when it exists, else the first other
+ * spelling that exists, in Pi's order (" AM."/" PM." with a narrow no-break space, NFD, "'" as U+2019, NFD with
+ * U+2019), else `path`. Checking a spelling that does not exist would test the wrong file.
+ */
+function readOpens(path: string): string {
+  if (existsSync(path)) return path;
+  const curly = (p: string) => p.replace(/'/g, "\u2019");
+  const nfd = path.normalize("NFD");
+  return [path.replace(/ (AM|PM)\./gi, "\u202f$1."), nfd, curly(path), curly(nfd)].find((p) => p !== path && existsSync(p)) ?? path;
+}
 
 /**
  * Resolves `path` against `cwd` the way the operating system does: one component at a time, following each symlink
@@ -76,14 +117,16 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
   if (toolName === "bash" && typeof input.command === "string") {
     paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, home) ?? []);
   } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
-    paths = [input.path];
+    // Pi resolves a file tool's path against the working directory, applying ".." before any link is followed.
+    const opened = resolve(cwd, asPiOpens(input.path, home));
+    paths = [toolName === "read" ? readOpens(opened) : opened];
   }
   const outside = paths
     .map((path) => physicalPath(path, realCwd))
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
   if (outside === undefined) return undefined;
   const reason =
-    `${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
+    `${BLOCKED}${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
     "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
   // A blocked search for a name gets the project's files with that name, found here without running the command.
   const found = toolName === "bash" && typeof input.command === "string" ? projectMatches(cwd, namePatterns(input.command)) : [];
@@ -95,28 +138,58 @@ const SKIP_DIRS = new Set([".git", "node_modules", ".venv", "venv", "target", "d
 const MAX_ENTRIES = 5000;
 const MAX_MATCHES = 10;
 
-const glob = (pattern: string, flags: string) =>
-  new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, flags);
+/** A shell name pattern: "*" any run, "?" any one character, everything else literal. */
+interface Glob {
+  pattern: string;
+  path: boolean;
+  ignoreCase: boolean;
+}
+
+/**
+ * Whether `text` matches `pattern` (see Glob), by one pass that backtracks only to the last "*": time grows with the
+ * two lengths multiplied, never exponentially. A regex built from the pattern took 132 s on ten "*"s and a long name.
+ */
+function globMatch(pattern: string, text: string): boolean {
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let resume = 0;
+  while (t < text.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) {
+      p++;
+      t++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      resume = t;
+    } else if (star >= 0) {
+      p = star + 1;
+      t = ++resume;
+    } else return false;
+  }
+  while (p < pattern.length && pattern[p] === "*") p++;
+  return p === pattern.length;
+}
 
 /**
  * What a shell command searches for by name: find's -name, -iname, and -path patterns, and the file name of an
  * absolute path argument (one with an extension).
  */
-function namePatterns(command: string): { path: boolean; re: RegExp }[] {
+function namePatterns(command: string): Glob[] {
   const unquote = (word: string) => word.replace(/^['"]|['"]$/g, "");
-  const patterns: { path: boolean; re: RegExp }[] = [];
+  const patterns: Glob[] = [];
   for (const m of command.matchAll(/-(i?name|i?path)\s+('[^']*'|"[^"]*"|\S+)/g)) {
-    patterns.push({ path: m[1].endsWith("path"), re: glob(unquote(m[2]), m[1].startsWith("i") ? "i" : "") });
+    const ignoreCase = m[1].startsWith("i");
+    patterns.push({ pattern: ignoreCase ? unquote(m[2]).toLowerCase() : unquote(m[2]), path: m[1].endsWith("path"), ignoreCase });
   }
   if (!patterns.length) {
     const name = command.match(/(?:^|\s)['"]?\/[^\s'"]*\/([^\s'"/]+\.[A-Za-z0-9]+)['"]?(?=\s|$)/)?.[1];
-    if (name) patterns.push({ path: false, re: glob(name, "") });
+    if (name) patterns.push({ pattern: name, path: false, ignoreCase: false });
   }
   return patterns;
 }
 
 /** Project files (relative paths) matching every pattern, breadth first within the entry and match limits. */
-function projectMatches(cwd: string, patterns: { path: boolean; re: RegExp }[]): string[] {
+function projectMatches(cwd: string, patterns: Glob[]): string[] {
   if (!patterns.length) return [];
   const found: string[] = [];
   const queue = [""];
@@ -134,7 +207,12 @@ function projectMatches(cwd: string, patterns: { path: boolean; re: RegExp }[]):
       const rel = dir ? `${dir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) queue.push(rel);
-      } else if (patterns.every((p) => p.re.test(p.path ? `./${rel}` : entry.name))) {
+      } else if (
+        patterns.every((p) => {
+          const subject = p.path ? `./${rel}` : entry.name;
+          return globMatch(p.pattern, p.ignoreCase ? subject.toLowerCase() : subject);
+        })
+      ) {
         found.push(rel);
       }
     }

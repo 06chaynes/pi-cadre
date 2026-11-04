@@ -36,7 +36,8 @@ const ANSWER_NUMBER = new RegExp(`(?<![\\w.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 const SOURCE_NUMBER = new RegExp(`(?<![\\d.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 // Code and file paths are the model's own material, not claims about sources.
 const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
-const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
+// The second form starts only where a word starts: started inside a long word it backtracked over the rest of it.
+const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|(?<![\w.-])[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
 // Line numbers into files ("line 190", "lines 183-188 and 202", "sessions.py:159-210") are positions in the code, which
 // read results do not print, so like paths they are not claims about sources.
 const RANGE = "\\d+(?:\\s*[-–]\\s*\\d+)?";
@@ -54,13 +55,25 @@ const QUOTE_WORDS = 8;
 // unsupported quotes of three words or fewer were labels; every misquote had 13 words or more).
 const MIN_QUOTE_WORDS = 4;
 
-const bareUrl = (url: string) => url.replace(/[).,;:'"*`>\]|]+$/, "");
+// Characters that end a sentence or markup around a URL rather than belong to it.
+const URL_TRAILERS = new Set([...")].,;:'\"*`>|"]);
+
+/** `url` without trailing punctuation, trimmed by one pass from the end (a regex backtracked on long runs of it). */
+export function bareUrl(url: string): string {
+  let end = url.length;
+  while (end > 0 && URL_TRAILERS.has(url[end - 1])) end--;
+  return url.slice(0, end);
+}
 const normUrl = (url: string) =>
   bareUrl(url)
     .replace(/^https?:\/\/(www\.|m\.)?/i, "")
     .replace(/\.m\.wikipedia\./i, ".wikipedia.")
     .replace(/\/$/, "")
     .toLowerCase();
+// A Markdown link or image as fetched pages write them, [text](url "title"), reduced to its text for quote matching: a
+// quote of the page's words did not match its source. The target allows one level of parentheses (/wiki/A_(b)); no
+// part can scan past a "[" or "(" it did not open, so the pattern is linear on a page.
+const MARKDOWN_LINK = /!?\[([^\[\]\n]*)\]\([^()\s[\]]*(?:\([^()\s[\]]*\)[^()\s[\]]*)*(?:\s+"[^"\n]*")?\)/g;
 const normNumber = (n: string) => n.replace(/[,\u2009\u202f ]/g, "");
 // Line comment and quote markers at line starts (///, //, #, *, --, ;, >) are dropped, so a quoted doc comment or
 // quoted block that spans lines matches its source.
@@ -128,7 +141,9 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
 export function unsupportedClaims(answer: string, sources: readonly Source[], evidence: readonly string[] = sources.map(textOfSource), urls: readonly string[] = []): Unsupported[] {
   const texts = sources.map(textOfSource);
   const sourceUrls = new Set([...texts.flatMap((s) => s.match(URL) ?? []), ...urls].map(normUrl));
-  const sourceText = normText(texts.join("\n"));
+  // A quote matches the sources as written, or as a reader sees them with links reduced to their text.
+  const joined = texts.join("\n");
+  const sourceTexts = [normText(joined), normText(joined.replace(MARKDOWN_LINK, "$1"))];
   const numbers = sources.flatMap((src) => {
     const s = textOfSource(src);
     const guessed = new Set(typeof src === "string" ? [] : src.guessed.map(normNumber));
@@ -137,7 +152,10 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
   const circular = new Set<Claim>();
   const supported = (claim: Claim, rest: string) => {
     if (claim.kind === "url") return sourceUrls.has(normUrl(claim.value));
-    if (claim.kind === "quote") return sourceText.includes(normText(claim.value).split(" ").slice(0, QUOTE_WORDS).join(" "));
+    if (claim.kind === "quote") {
+      const opening = normText(claim.value).split(" ").slice(0, QUOTE_WORDS).join(" ");
+      return sourceTexts.some((text) => text.includes(opening));
+    }
     const scaled = SCALE.test(rest);
     const words = new Set(terms(claim.context).filter((t) => !/^\d+$/.test(t)));
     const found = numbers.filter(({ value }) => sameNumber(claim.value, value, scaled));

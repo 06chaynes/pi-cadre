@@ -11,17 +11,11 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 
-import { keywords } from "./text.ts";
+import { keywords, safeName, safePath } from "./text.ts";
 
 const HEADING = "Code symbols matching the request (from descry):";
 const MAX_RESULTS = 12;
 const MAX_TERMS = 12;
-// Longest file or symbol name listed; names come from the repository, which may not be trusted.
-const MAX_NAME_CHARS = 200;
-// Control characters (newlines among them) in a repository's file or symbol name would put the repository's own lines
-// into the system message, where the list goes; git C-quotes such names in the project map, descry returns them as-is.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-const safeName = (value: unknown): value is string => typeof value === "string" && value.length <= MAX_NAME_CHARS && !CONTROL.test(value);
 const PROTOCOL_VERSION = "2025-06-18";
 // The first search after startup waits for the embedding model (about 9 s on a 4B-model machine); later ones are fast.
 const SEARCH_TIMEOUT_MS = 15_000;
@@ -29,12 +23,14 @@ const SEARCH_TIMEOUT_MS = 15_000;
 const HEALTH_POLL_MS = 250;
 
 /**
- * The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH; undefined when neither is there. Only
- * absolute paths count: the server starts on its own in the project directory, where a relative PATH entry (".",
- * "bin") or a relative DESCRY_MCP_BIN would find a descry-mcp the project itself supplies.
+ * The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH (descry-mcp.exe on Windows, the name pip
+ * and uv install there); undefined when neither is there. Only absolute paths count: the server starts on its own in
+ * the project directory, where a relative PATH entry (".", "bin") or a relative DESCRY_MCP_BIN would find a descry-mcp
+ * the project itself supplies.
  */
-export function descryMcpCommand(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const candidates = [env.DESCRY_MCP_BIN, ...(env.PATH ?? "").split(delimiter).filter(isAbsolute).map((dir) => join(dir, "descry-mcp"))];
+export function descryMcpCommand(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | undefined {
+  const name = platform === "win32" ? "descry-mcp.exe" : "descry-mcp";
+  const candidates = [env.DESCRY_MCP_BIN, ...(env.PATH ?? "").split(delimiter).filter(isAbsolute).map((dir) => join(dir, name))];
   for (const candidate of candidates) {
     if (!candidate || !isAbsolute(candidate)) continue;
     try {
@@ -148,7 +144,7 @@ export async function descrySymbols(server: DescryServer, prompt: string, maxCha
   const lines = [HEADING];
   let used = HEADING.length;
   for (const r of found?.results ?? []) {
-    if (!safeName(r?.file)) continue;
+    if (!safePath(r?.file)) continue;
     // A file result is its path; a symbol is its name and file:line. A symbol with an unsafe name or a line that is not
     // a whole number is left out.
     const line = Number.isInteger(r.line) && r.line > 0 ? `:${r.line}` : "";

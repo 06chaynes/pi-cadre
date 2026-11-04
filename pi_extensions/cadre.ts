@@ -24,12 +24,13 @@
  * Every request gets short coding rules appended to the system message.
  */
 
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { guardReason } from "./guard.ts";
+import { BLOCKED, guardReason } from "./guard.ts";
 import { researchQuestion, routeRequest } from "./router.ts";
 import { listedItems, passages, recall, taskQueries } from "./memory.ts";
 import { itemFor, keepBest, rerankScores } from "./rerank.ts";
@@ -39,7 +40,7 @@ import { guesses, withoutGuesses } from "./text.ts";
 import { loadOriginal, pruneOriginals, saveOriginal } from "./originals.ts";
 import { conversationText, countTokens, requestTokens } from "./tokens.ts";
 import { syntaxError } from "./syntax.ts";
-import { unsupportedClaims } from "./claims.ts";
+import { bareUrl, unsupportedClaims } from "./claims.ts";
 import { shortenHits, shortenText, unseenNote } from "./unseen.ts";
 import {
   type Contexts,
@@ -502,7 +503,9 @@ export default async function (pi: ExtensionAPI) {
           const text = textOf(message).trim();
           if (message.role === "user") pairs.push([text.slice(0, 500), ""]);
           else if (message.role === "assistant" && text && pairs.length) pairs[pairs.length - 1][1] = text.slice(0, 1500);
-          else if (message.role !== "assistant" && message.role !== "toolResult" && text) {
+          // Only an earlier compaction or branch summary is carried: cadre's own notes quote source text, which a page
+          // could lay out like a summary.
+          else if ((message.role === "compactionSummary" || message.role === "branchSummary") && text) {
             const [earlier, stepBlock] = text.split(STEPS_HEADING);
             if (stepBlock) carried.push(...stepBlock.split("\n").filter((line: string) => /^\d+\. /.test(line)).map((line: string) => line.replace(/^\d+\. /, "")));
             const prior = earlier.split(REQUEST_HEADING)[0].trim();
@@ -513,7 +516,7 @@ export default async function (pi: ExtensionAPI) {
       const lines = pairs.length ? ["Earlier in this session (condensed by cadre without a model; newest answers are verbatim):", ...renderDigest(pairs)] : [];
       if (!condense) {
         lines.push("The current request and all work on it follow unchanged.");
-        return { compaction: { summary: lines.join("\n"), firstKeptEntryId: entries[current].sourceEntry.id, tokensBefore: (event.preparation as any).tokensBefore ?? 0 } };
+        return { compaction: { summary: contained(lines.join("\n")), firstKeptEntryId: entries[current].sourceEntry.id, tokensBefore: (event.preparation as any).tokensBefore ?? 0 } };
       }
       // Steps before the last KEEP_STEPS: each call and a one-line outcome. Their full results stay in the session.
       const results = new Map<string, any>();
@@ -536,7 +539,7 @@ export default async function (pi: ExtensionAPI) {
       lines.push("The most recent steps follow unchanged.");
       return {
         compaction: {
-          summary: lines.join("\n"),
+          summary: contained(lines.join("\n")),
           firstKeptEntryId: steps[steps.length - KEEP_STEPS].sourceEntry.id,
           tokensBefore: (event.preparation as any).tokensBefore ?? 0,
         },
@@ -645,8 +648,8 @@ export default async function (pi: ExtensionAPI) {
     }
     if (!sourcesChecked) {
       sourcesChecked = true;
-      const note = sourceCheck(ctx);
-      if (note) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: note, display: true }] };
+      const checked = sourceCheck(ctx);
+      if (checked) return { continue: true, entries: [{ type: "custom_message" as const, customType: "cadre-sources", content: checked.note, display: true, details: { quoted: checked.quoted } }] };
     }
     const edits = await clearResults(event.context.contextEntries, 0, new Set(), "after the answer");
     return edits.length ? { entries: edits } : undefined;
@@ -663,14 +666,25 @@ export default async function (pi: ExtensionAPI) {
     const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
     const run = branch.slice(branch.findLastIndex((m) => m.role === "user") + 1);
     if (run.some((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))) return undefined;
+    // The user named a path outside the project and the guard blocked a call on it: the answer is about that file,
+    // not the world (asked for web sources, Spark searched about sandboxes for seven minutes).
+    const calls = new Map(run.flatMap((m) => (m.role === "assistant" ? (m.content ?? []).filter((b: any) => b.type === "toolCall").map((b: any) => [b.id, b]) : [])));
+    // Only a word the prompt names that the guard itself blocks counts: a URL or "3.13" in a blocked command does not.
+    const named = (name: string, call: any) => {
+      const args = call?.arguments ?? {};
+      const words = typeof args.path === "string" ? [args.path] : String(args.command ?? "").split(/[\s;|&()<>'"`=]+/);
+      return words.some((w: string) => w.length >= 3 && lastPrompt.includes(w) && guardReason(name, name === "bash" ? { command: w } : { path: w }, ctx.cwd, homedir()) !== undefined);
+    };
+    const blocked = (m: any) => m.role === "toolResult" && m.isError && LOCAL_TOOLS.has(m.toolName) && textOf(m).startsWith(BLOCKED);
+    if (run.some((m) => blocked(m) && named(m.toolName, calls.get(m.toolCallId)))) return undefined;
     return `Research check: this answer was given without any source. Look it up with ${remote.join(", ")}, then answer from what the sources say.`;
   };
 
   /**
    * A note for the model when its answer, or a prose file it wrote in this run, cites a URL that appears only in failed
-   * tool calls, or (with the claims option) holds a number, quote or URL that no source supports. Sources are the user's
-   * messages, the system prompt, every result that succeeded, and the saved originals of shortened results. Undefined
-   * when everything checks out.
+   * tool calls, or holds a number, quote or URL that no source supports, with the tool text it refers to by number
+   * (`quoted`: failed calls' errors, closest source passages). Sources are the user's messages, the system prompt,
+   * every result that succeeded, and the saved originals of shortened results. Undefined when everything checks out.
    */
   const sourceCheck = (ctx: ExtensionContext) => {
     const branch = (ctx.sessionManager.getBranch() as any[]).flatMap((e) => (e.type === "message" ? [e.message] : []));
@@ -678,7 +692,7 @@ export default async function (pi: ExtensionAPI) {
     const run = branch.slice(start + 1);
     const results = new Map<string, any>();
     for (const m of branch) if (m.role === "toolResult") results.set(m.toolCallId, m);
-    const bare = (url: string) => url.replace(/[).,;:'"*`>\]|]+$/, "").replace(/\/$/, "");
+    const bare = (url: string) => bareUrl(url).replace(/\/$/, "");
     const urls = (text: string) => (text.match(/https?:\/\/[^\s"'<>`|)\]]+/g) ?? []).map(bare);
     const failed = new Map<string, string>();
     const read = new Set<string>();
@@ -707,12 +721,16 @@ export default async function (pi: ExtensionAPI) {
     const final = [...run].reverse().find((m) => m.role === "assistant" && textOf(m).trim());
     if (final) produced.push(["your answer", textOf(final)]);
     const lines: string[] = [];
+    // Text from tools (failed calls' errors, source passages) the note refers to by number; it reaches the model as a
+    // tool result before the note (see withSourceQuotes), never in the note, which Pi sends as a user turn.
+    const quoted: string[] = [];
     const named = new Set<string>();
     for (const [where, text] of produced) {
       for (const url of urls(text)) {
         if (!failed.has(url) || read.has(url) || named.has(url)) continue;
         named.add(url);
-        lines.push(`${where} cites ${url}, which failed to load (${failed.get(url)}) and appears in no tool result that succeeded.`);
+        quoted.push(failed.get(url)!);
+        lines.push(`${where} cites ${url}, which failed to load (its error is [${quoted.length}]) and appears in no tool result that succeeded.`);
       }
     }
     {
@@ -750,7 +768,9 @@ export default async function (pi: ExtensionAPI) {
         .filter((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))
         .flatMap((m) =>
           urls(argsOf.get(m.toolCallId) ?? "").flatMap((page) => {
-            const linked = [...textOf(m).matchAll(/\]\((\/[^)\s]*)\)/g)].flatMap((l) => {
+            // A target stops at "]" as well as ")": each match starts at "](", so a scan ends at the next possible start
+            // (scanning to the end of a page from every "](/" took time growing with the square of its length).
+            const linked = [...textOf(m).matchAll(/\]\((\/[^)\s\]]*)\)/g)].flatMap((l) => {
               try {
                 return [new URL(l[1], page).href];
               } catch {
@@ -775,7 +795,15 @@ export default async function (pi: ExtensionAPI) {
       const evidence = results.map((r) => r.text);
       // A line that refers to a listed item by number ("- Item 9: 299,792,458 m/s.", "9. ...") is read with that item's
       // text, so its values are checked against sources about the item rather than flagged for lacking topic words.
-      const items = listedItems(lastPrompt);
+      // Each item without its closing punctuation (and the space after it), trimmed once by one pass from the end: a
+      // pattern doing this backtracked over long runs of dots.
+      const items = listedItems(lastPrompt).map((item) => {
+        let end = item.length;
+        while (end > 0 && /\s/.test(item[end - 1])) end--;
+        let cut = end;
+        while (cut > 0 && ".?!".includes(item[cut - 1])) cut--;
+        return cut < end ? item.slice(0, cut) : item;
+      });
       const withItems = (text: string) =>
         text
           .split("\n")
@@ -785,7 +813,7 @@ export default async function (pi: ExtensionAPI) {
             if (!ref || n < 1 || n > items.length) return line;
             // After the reference itself, without its closing full stop, so it stays in the claim's sentence.
             const at = ref.index! + ref[0].length;
-            return `${line.slice(0, at)} (${items[n - 1].replace(/[.?!]+\s*$/, "")})${line.slice(at)}`;
+            return `${line.slice(0, at)} (${items[n - 1]})${line.slice(at)}`;
           })
           .join("\n");
       for (const [where, text] of produced) {
@@ -794,12 +822,15 @@ export default async function (pi: ExtensionAPI) {
           named.add(claim.value);
           const context = claim.context.length > CLAIM_CONTEXT_CHARS ? claim.context.slice(0, CLAIM_CONTEXT_CHARS) + "..." : claim.context;
           const why = circular ? "appears only in results of a search that already contained it, so no source confirms it" : "appears in no source";
-          lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage: "${passage}"` : ""}.`);
+          if (passage) quoted.push(passage);
+          lines.push(`${where}: ${claim.value} (in "${context}") ${why}${passage ? `; closest source passage [${quoted.length}]` : ""}.`);
         }
       }
     }
     if (!lines.length) return undefined;
-    return `Source check:\n- ${lines.join("\n- ")}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it); for a value only your own search contained, search again without it. Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
+    const where = quoted.length ? "\nThe numbered passages and errors are in the cadre_sources result above." : "";
+    const note = `Source check:\n- ${lines.join("\n- ")}${where}\nFor each item, correct it from a source, show how it was computed from one, or remove it (say the item was not found if no source has it); for a value only your own search contained, search again without it. Replace a URL that failed with a source you retrieved. Then give the corrected answer.`;
+    return { note, quoted };
   };
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -823,9 +854,14 @@ export default async function (pi: ExtensionAPI) {
   // those events each request starts with the previous one and the server reuses its cached prompt: stripping the
   // previous step's reasoning on every request made it rebuild that step and its result each time. The session keeps
   // everything.
+  // A source-check note's passages come with it for any model: the note refers to them by number.
   pi.on("context", async (event, ctx) => {
-    if (ctx.model?.provider !== PROVIDER) return undefined;
+    if (ctx.model?.provider !== PROVIDER) {
+      const quoted = withSourceQuotes(event.messages);
+      return quoted === event.messages ? undefined : { messages: quoted };
+    }
     let messages = withoutEarlierReasoning(event.messages);
+    messages = withSourceQuotes(messages);
     messages = withRecall(messages, ctx) ?? messages;
     return messages === event.messages ? undefined : { messages };
   });
@@ -850,14 +886,36 @@ export default async function (pi: ExtensionAPI) {
   };
 
   /**
+   * `messages` with the passages and errors a source-check note quotes placed just before it as a cadre_sources tool
+   * result; the same array when no note quotes any.
+   */
+  const withSourceQuotes = (messages: any[]) => {
+    if (!messages.some((m) => m.role === "custom" && m.customType === "cadre-sources" && m.details?.quoted?.length)) return messages;
+    return messages.flatMap((m) => {
+      const quoted: unknown = m.role === "custom" && m.customType === "cadre-sources" ? m.details?.quoted : undefined;
+      if (!Array.isArray(quoted) || !quoted.length) return [m];
+      return [...toolPair("cadre_sources", {}, quoted.map((q, i) => `[${i + 1}] ${String(q)}`).join("\n\n"), String(m.timestamp)), m];
+    });
+  };
+
+  /**
    * An assistant tool call and its result carrying `text`, for context added by the extension: text that came from tool
    * output stays tool output, never a user turn.
    */
-  const toolPair = (name: string, args: Record<string, unknown>, text: string) => {
-    const id = `cadre-${name}-${Date.now()}`;
+  /**
+   * `summary` with any <summary> or </summary> tag in the carried text defused: Pi sends a compaction summary as user
+   * text inside <summary>...</summary>, and a carried line (a step's result, an answer) could close it early.
+   */
+  const contained = (summary: string) => summary.replace(/<(\/?summary)/gi, "\u2039$1");
+
+  const toolPair = (name: string, args: Record<string, unknown>, text: string, source = "") => {
+    // The ID comes from the content (and `source`, the entry the pair belongs to), so the same context gives the same
+    // request and the server reuses its cached prompt; an ID made from the time changed every request from this point
+    // on. `source` keeps two pairs with the same text apart.
+    const id = `cadre-${name}-${createHash("sha256").update(`${source}\n${text}`).digest("hex").slice(0, 16)}`;
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-    const call = { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], api: "openai-completions", provider: PROVIDER, model: ROUTER_ID, usage, stopReason: "toolUse", timestamp: Date.now() };
-    const result = { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: Date.now() };
+    const call = { role: "assistant", content: [{ type: "toolCall", id, name, arguments: args }], api: "openai-completions", provider: PROVIDER, model: ROUTER_ID, usage, stopReason: "toolUse", timestamp: 0 };
+    const result = { role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text }], isError: false, timestamp: 0 };
     return [call, result] as any[];
   };
 
