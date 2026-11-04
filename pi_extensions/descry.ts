@@ -23,12 +23,14 @@ const SEARCH_TIMEOUT_MS = 15_000;
 const HEALTH_POLL_MS = 250;
 
 /**
- * The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH; undefined when neither is there. Only
- * absolute paths count: the server starts on its own in the project directory, where a relative PATH entry (".",
- * "bin") or a relative DESCRY_MCP_BIN would find a descry-mcp the project itself supplies.
+ * The descry MCP server executable: DESCRY_MCP_BIN, else descry-mcp on PATH (descry-mcp.exe on Windows, the name pip
+ * and uv install there); undefined when neither is there. Only absolute paths count: the server starts on its own in
+ * the project directory, where a relative PATH entry (".", "bin") or a relative DESCRY_MCP_BIN would find a descry-mcp
+ * the project itself supplies.
  */
-export function descryMcpCommand(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const candidates = [env.DESCRY_MCP_BIN, ...(env.PATH ?? "").split(delimiter).filter(isAbsolute).map((dir) => join(dir, "descry-mcp"))];
+export function descryMcpCommand(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | undefined {
+  const name = platform === "win32" ? "descry-mcp.exe" : "descry-mcp";
+  const candidates = [env.DESCRY_MCP_BIN, ...(env.PATH ?? "").split(delimiter).filter(isAbsolute).map((dir) => join(dir, name))];
   for (const candidate of candidates) {
     if (!candidate || !isAbsolute(candidate)) continue;
     try {

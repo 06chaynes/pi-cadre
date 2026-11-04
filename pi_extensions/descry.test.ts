@@ -157,6 +157,14 @@ test("descryMcpCommand finds DESCRY_MCP_BIN or descry-mcp on PATH", () => {
   assert.equal(descryMcpCommand({ PATH: "/nonexistent" }), undefined);
 });
 
+test("on Windows descryMcpCommand finds descry-mcp.exe, the name pip and uv install there", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cadre-descry-win-"));
+  writeFileSync(join(dir, "descry-mcp.exe"), "");
+  chmodSync(join(dir, "descry-mcp.exe"), 0o755);
+  assert.equal(descryMcpCommand({ PATH: `/nonexistent${delimiter}${dir}` }, "win32"), join(dir, "descry-mcp.exe"));
+  assert.equal(descryMcpCommand({ PATH: dir }, "linux"), undefined);
+});
+
 test("a descry-mcp planted in the project is never found through a relative PATH entry or DESCRY_MCP_BIN", () => {
   // descry starts on its own when found, in the project directory: a relative entry (".", "bin") would resolve there.
   const project = mkdtempSync(join(tmpdir(), "cadre-planted-"));
