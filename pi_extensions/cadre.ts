@@ -370,7 +370,8 @@ export default async function (pi: ExtensionAPI) {
     // without the guess.
     if (!LOCAL_TOOLS.has(event.toolName)) neutralizeQueries(event.input as Record<string, unknown>, ctx);
     if (!guardOn) return undefined;
-    const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir());
+    const others = pi.getActiveTools().filter((name) => !LOCAL_TOOLS.has(name));
+    const reason = guardReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd, homedir(), others);
     return reason === undefined ? undefined : { block: true, reason };
   });
 

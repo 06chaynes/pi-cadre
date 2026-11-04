@@ -143,6 +143,10 @@ test("the tool_call hook blocks until /cadre-guard off", async () => {
   const blocked = await calls.handlers["tool_call"](call, ctx);
   assert.equal(blocked.block, true);
   assert.match(blocked.reason, /outside the project/);
+  // The block names the session's active tools beyond Pi's own, here none, then a web tool.
+  assert.doesNotMatch(blocked.reason, /For information from outside the project/);
+  calls.activeTools = ["read", "bash", "web_fetch"];
+  assert.match((await calls.handlers["tool_call"](call, ctx)).reason, /For information from outside the project, use web_fetch\./);
   await calls.commands["cadre-guard"].handler("off", ctx);
   assert.equal(await calls.handlers["tool_call"](call, ctx), undefined);
 });
