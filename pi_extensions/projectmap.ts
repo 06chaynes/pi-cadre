@@ -9,7 +9,7 @@ import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { safeName } from "./text.ts";
+import { safePath } from "./text.ts";
 
 // Directories a listing outside git skips (dependencies, builds, caches, version control), and tool caches that are
 // skipped in git listings too (descry's index, which cadre may create).
@@ -26,7 +26,7 @@ function projectFiles(cwd: string): string[] {
     // a git.exe committed to the project would otherwise run.
     // -z gives names as they are (NUL-separated, not C-quoted), so names are judged by one filter on both paths.
     const out = execFileSync("git", ["-C", cwd, "-c", "core.fsmonitor=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: tmpdir(), encoding: "utf8", timeout: 3000, maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
-    return out.split("\0").filter((file) => file && safeName(file) && !TOOL_CACHES.some((dir) => file.startsWith(dir))).slice(0, MAX_FILES);
+    return out.split("\0").filter((file) => file && safePath(file) && !TOOL_CACHES.some((dir) => file.startsWith(dir))).slice(0, MAX_FILES);
   } catch {
     const files: string[] = [];
     const queue = [""];
@@ -41,7 +41,7 @@ function projectFiles(cwd: string): string[] {
       for (const entry of entries) {
         const rel = dir ? `${dir}/${entry.name}` : entry.name;
         // Git C-quotes such names; this walk does not, and the map goes into the system message.
-        if (!safeName(rel)) continue;
+        if (!safePath(rel)) continue;
         if (entry.isDirectory()) {
           if (!SKIP_DIRS.has(entry.name) && !TOOL_CACHES.includes(`${entry.name}/`)) queue.push(rel);
         } else files.push(rel);

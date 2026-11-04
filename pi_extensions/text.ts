@@ -97,7 +97,12 @@ const MAX_NAME_CHARS = 200;
 // project's own lines into the system message.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
-/** Whether a name from the project (a file path, a symbol) is safe to list in the system message. */
+/** Whether a name from the project (a file or symbol name) is safe to list in the system message. */
 export function safeName(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_NAME_CHARS && !CONTROL.test(value);
+}
+
+/** Whether a relative path from the project is safe to list: every part a safe name, however deep the path. */
+export function safePath(value: unknown): value is string {
+  return typeof value === "string" && value.split("/").every(safeName);
 }

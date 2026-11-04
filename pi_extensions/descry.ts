@@ -11,7 +11,7 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 
-import { keywords, safeName } from "./text.ts";
+import { keywords, safeName, safePath } from "./text.ts";
 
 const HEADING = "Code symbols matching the request (from descry):";
 const MAX_RESULTS = 12;
@@ -144,7 +144,7 @@ export async function descrySymbols(server: DescryServer, prompt: string, maxCha
   const lines = [HEADING];
   let used = HEADING.length;
   for (const r of found?.results ?? []) {
-    if (!safeName(r?.file)) continue;
+    if (!safePath(r?.file)) continue;
     // A file result is its path; a symbol is its name and file:line. A symbol with an unsafe name or a line that is not
     // a whole number is left out.
     const line = Number.isInteger(r.line) && r.line > 0 ? `:${r.line}` : "";

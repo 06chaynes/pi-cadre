@@ -83,6 +83,17 @@ test("a file name with control characters never reaches the map, in or outside g
   }
 });
 
+test("a file deep in the tree is listed, however long its whole path, in or outside git", () => {
+  // The 200-character limit is per name; applied to whole paths it dropped deep files (and, outside git, whole
+  // directories) from the map.
+  const deep = `${"src/main/java/com/example/".repeat(9)}Deep.java`;
+  assert.ok(deep.length > 200);
+  for (const gitignore of [undefined, ""]) {
+    const map = projectMap(project([deep, "top.py"], gitignore), "Deep.java", 20000);
+    assert.match(map, /Deep\.java/, String(gitignore));
+  }
+});
+
 test("a repository's own git config cannot run a command while the map is built", () => {
   const dir = project(["a.txt"], "");
   const marker = join(dir, "ran");
