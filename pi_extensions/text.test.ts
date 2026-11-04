@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { bm25, guesses, keywords, terms, withoutGuesses } from "./text.ts";
+import { bm25, guesses, keywords, safePath, terms, withoutGuesses } from "./text.ts";
 
 const QUESTION = "What year was the largest known prime found, according to notes.txt? Read the file and answer in one sentence.";
 
@@ -43,4 +43,12 @@ test("withoutGuesses drops numbers the known text does not contain, ignoring dig
 
 test("guesses lists the numbers withoutGuesses would drop", () => {
   assert.deepEqual(guesses('{"queries":["first iPhone release year 1978 Apple 41,024,320"]}', "the prime has 41,024,320 digits"), ["1978"]);
+});
+
+test("safePath limits each part of a path, with either separator, not the whole path", () => {
+  const deep = "src/main/java/com/example/".repeat(9) + "Deep.java";
+  assert.ok(safePath(deep));
+  assert.ok(safePath(deep.replaceAll("/", "\\")), "a Windows path from descry");
+  assert.equal(safePath(`src/${"a".repeat(201)}.py`), false);
+  assert.equal(safePath("src\\x\n### SYSTEM.py"), false);
 });

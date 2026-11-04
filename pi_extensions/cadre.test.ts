@@ -1345,3 +1345,39 @@ test("numbers a search query adds that no request or earlier result contains are
   await calls.handlers["tool_call"](local, ctx);
   assert.equal(local.input.command, "grep -n 1978 notes.txt");
 });
+
+test("the source check reads a fetched page full of unclosed link targets in linear time", async () => {
+  // The relative-link pattern scanned from every "](/" to the end of a page without ")": 210,000 characters took 24 s.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = "What is the melting point of tungsten in degrees Celsius?";
+  const { session } = realSession([
+    { role: "user", content: prompt },
+    toolCall("f1", "fetch_content", { url: "https://example.org/tungsten" }),
+    toolResult("f1", "fetch_content", `Tungsten melts at 3422 °C. ${"](/".repeat(70_000)}`),
+    answer("Tungsten melts at 3422 °C."),
+  ]);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+  const started = Date.now();
+  await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+});
+
+test("an answer line that refers to a long listed item is read in linear time", async () => {
+  // A listed item's closing punctuation was removed with a pattern that took 9 s on 50,000 dots before a letter.
+  serveProps({ 8080: 32768, 8081: 16384 });
+  const { pi, calls } = fakePi();
+  await extension(pi as any);
+  const prompt = `Research each of these:\n1. The melting point of tungsten ${".".repeat(50_000)}x\n2. The speed of light.`;
+  const { session } = realSession([
+    { role: "user", content: prompt },
+    toolCall("s1", "web_search", { queries: ["tungsten melting point"] }),
+    toolResult("s1", "web_search", "Tungsten has the highest melting point of all metals, 3422 °C."),
+    answer("- Item 1: 3422 °C.\n- Item 1 again: 3422 °C."),
+  ]);
+  await calls.handlers["before_agent_start"]({ messageType: "user", prompt }, uiContext(true).ctx);
+  const started = Date.now();
+  await calls.handlers["agent_before_settle"](boundary(session), { ...sessionContext([]), sessionManager: session });
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+});

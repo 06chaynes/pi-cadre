@@ -102,7 +102,7 @@ export function safeName(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_NAME_CHARS && !CONTROL.test(value);
 }
 
-/** Whether a relative path from the project is safe to list: every part a safe name, however deep the path. */
+/** Whether a relative path from the project is safe to list: every part (split at a slash or backslash) a safe name. */
 export function safePath(value: unknown): value is string {
-  return typeof value === "string" && value.split("/").every(safeName);
+  return typeof value === "string" && value.split(/[\\/]/).every(safeName);
 }

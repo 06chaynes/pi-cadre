@@ -757,7 +757,9 @@ export default async function (pi: ExtensionAPI) {
         .filter((m) => m.role === "toolResult" && !m.isError && !LOCAL_TOOLS.has(m.toolName))
         .flatMap((m) =>
           urls(argsOf.get(m.toolCallId) ?? "").flatMap((page) => {
-            const linked = [...textOf(m).matchAll(/\]\((\/[^)\s]*)\)/g)].flatMap((l) => {
+            // A target stops at "(" as well as ")": scanning past "(" to the end of a page took time growing with the
+            // square of its length.
+            const linked = [...textOf(m).matchAll(/\]\((\/[^()\s]*)\)/g)].flatMap((l) => {
               try {
                 return [new URL(l[1], page).href];
               } catch {
@@ -782,7 +784,15 @@ export default async function (pi: ExtensionAPI) {
       const evidence = results.map((r) => r.text);
       // A line that refers to a listed item by number ("- Item 9: 299,792,458 m/s.", "9. ...") is read with that item's
       // text, so its values are checked against sources about the item rather than flagged for lacking topic words.
-      const items = listedItems(lastPrompt);
+      // Each item without its closing punctuation (and the space after it), trimmed once by one pass from the end: a
+      // pattern doing this backtracked over long runs of dots.
+      const items = listedItems(lastPrompt).map((item) => {
+        let end = item.length;
+        while (end > 0 && /\s/.test(item[end - 1])) end--;
+        let cut = end;
+        while (cut > 0 && ".?!".includes(item[cut - 1])) cut--;
+        return cut < end ? item.slice(0, cut) : item;
+      });
       const withItems = (text: string) =>
         text
           .split("\n")
@@ -792,7 +802,7 @@ export default async function (pi: ExtensionAPI) {
             if (!ref || n < 1 || n > items.length) return line;
             // After the reference itself, without its closing full stop, so it stays in the claim's sentence.
             const at = ref.index! + ref[0].length;
-            return `${line.slice(0, at)} (${items[n - 1].replace(/[.?!]+\s*$/, "")})${line.slice(at)}`;
+            return `${line.slice(0, at)} (${items[n - 1]})${line.slice(at)}`;
           })
           .join("\n");
       for (const [where, text] of produced) {

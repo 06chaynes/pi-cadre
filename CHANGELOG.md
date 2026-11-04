@@ -12,8 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The path guard checks a file tool's path as Pi opens it: `~`, a leading `@`, `file://` URLs, Unicode spaces and (on
   Windows) MSYS drive paths are expanded first (`~/.bashrc` passed as a project file), `..` applies before symlinks
-  (Pi resolves the path as text, so a project link followed by `..` reached outside), and a read is checked under every
-  other spelling Pi's read falls back to when the path is missing (`'` as U+2019, ` AM.`/` PM.`, NFD).
+  (Pi resolves the path as text, so a project link followed by `..` reached outside), and a read is checked under the
+  spelling Pi's read opens when the path as written is missing (`'` as U+2019, ` AM.`/` PM.`, NFD).
 - Passages a source-check note quotes from web pages, and errors of failed calls, reach the model as a tool result
   (`cadre_sources`) before the note instead of inside it; the note goes to the model as a user turn. Exact replays of
   the step after a note: the model acted on it in 57 of 60 samples against 52, and went after the flagged item as
@@ -23,7 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A file name with control characters (a newline among them) never reaches the project map, in or outside git.
 - Linear time on text from web pages and projects: search terms (a long run of capitals took 2.4 s at 40,000
   characters), a blocked search's file-name suggestions (a wildcard pattern took 132 s), trailing punctuation after a
-  URL (80,000 dots took 10 s) and the path pattern of the source check (a 200,000-letter word took 63 s).
+  URL (80,000 dots took 10 s), the path pattern of the source check (a 200,000-letter word took 63 s), relative link
+  targets on fetched pages (24 s) and the closing punctuation of a listed item (18 s).
 
 ### Changed
 
@@ -45,7 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   load embeddings and return symbols.
 - Arguments after `--` reach llama-server unchanged on Windows, in both modes: values with `=`, `,` or `;` were split,
   and in dual mode a quoted `&` or `)` broke the command.
-- A file deep in the tree (a relative path over 200 characters) stays in the project map and descry's symbols.
+- A file deep in the tree (a relative path over 200 characters, with / or \\) stays in the project map and descry's
+  symbols.
 - A tool result cadre inserts (recall after compaction, a source check's passages) has an ID made from its content,
   so the server's prompt cache is reused.
 - `tests/test_launchers.py` runs the launchers of the platform it is on (CI covers Linux, macOS and Windows) with
