@@ -10,15 +10,6 @@ export interface Claim {
   value: string;
   /** The table row, or the sentence, the claim was taken from. */
   context: string;
-  /**
-   * For a number: "said" when a typical word stands just before it in its clause ("typically 90 minutes"), "asked"
-   * when it heads a table answer cell whose item asks for a typical value.
-   */
-  typical?: "said" | "asked";
-  /** For a number: the answer bounds it itself ("90+", "up to 90", "90 or more", "under 90"). */
-  ownBound?: boolean;
-  /** For a two-digit number taken only because it is given as typical: checked for bounds, not for a source. */
-  boundOnly?: boolean;
 }
 
 /**
@@ -31,11 +22,9 @@ export interface Unsupported {
   claim: Claim;
   /** True for a number found only in sources whose search already contained it. */
   circular?: boolean;
-  /**
-   * For a number given as typical: "sources" when every source passage clearly about it states it only as a bound
-   * ("dives of up to 90 minutes"), "answer" when the item asks for a typical value and the answer gives a bound.
-   */
-  bound?: "sources" | "answer";
+  /** True for a number the answer gives as typical that every source passage about it states only as a bound ("up to
+   * 90 minutes", "can dive for 90+ minutes"). */
+  bound?: boolean;
   /** The source passage closest to the claim's context, if any shares a word with it. */
   passage?: string;
 }
@@ -68,41 +57,11 @@ const QUOTE = /["“]([^"”\n]{12,300})["”]/g;
 // 1.2"): the write-up's own structure. The same number elsewhere (a table cell) is still a claim.
 const SECTION_NUMBER = /^ {0,3}#{1,6}[ \t]+\d+(?:\.\d+)+\.?(?=[ \t])|§\s*\d+(?:\.\d+)*|\bsections?\s+\d+(?:\.\d+)+/gim;
 const SCALE = /^\s*(thousand|million|billion|trillion|[kMB]\b)/;
-// A value given as typical, and words that make a value a bound instead. A source that only says sperm whales "can dive
-// for 90+ minutes" does not support "typically 90 minutes" (the research battery's recurring miss). English only, like
-// the scale words. Each is read in a short window that stops at a clause or cell break, so a typical word earlier in
-// a sentence ("Generally, ... and some dives reach 90") and a bound on another line do not count.
+// A value the answer presents as typical, and qualifiers that make a value a bound or a possibility instead. A source
+// that only says a sperm whale "can dive for 90+ minutes" does not support "typically 90 minutes" (the research
+// battery's recurring miss). English only, like the scale words.
 const TYPICAL = /\b(typical(ly)?|usual(ly)?|on average|average|normally|generally|routinely|commonly)\b/i;
-const BOUND_BEFORE = /(\bup to|\bas (long|much|many|high|far) as|\bmore than|\blonger than|\bover|\bat least|\bat most|\bupwards of|\bin excess of|\bmaximum( of)?|\bmax\.?|\brecord(ed)?( of)?|\blongest|\bnearly|\balmost|\bexceed(ing|s)?|\bunder|\bbelow|\bless than)[ \t]*$/i;
-const BOUND_AFTER = /^(\+(?![\d\s]*\d)|\s*(-|\s)?plus\b|(\s+\w+){0,2}\s+or (more|longer|less|fewer)\b)/i;
-const BREAK = /[,;|(\n]/;
-/** `text` before `index`, back to the last clause or cell break within `chars`. */
-const clauseBefore = (text: string, index: number, chars: number) => {
-  const slice = text.slice(Math.max(0, index - chars), index);
-  let cut = slice.length;
-  while (cut > 0 && !BREAK.test(slice[cut - 1])) cut--;
-  return slice.slice(cut);
-};
-/** `text` after `end`, up to the next clause break or full stop within `chars`. */
-const clauseAfter = (text: string, end: number, chars: number) => {
-  const slice = text.slice(end, end + chars);
-  const stop = slice.search(/[,;|(\n]|\.(\s|$)/);
-  return stop < 0 ? slice : slice.slice(0, stop);
-};
-/** Whether the number at `index`..`end` of `text` is stated as a bound there (Markdown emphasis between is ignored). */
-const boundAt = (text: string, index: number, end: number) =>
-  BOUND_BEFORE.test(clauseBefore(text, index, 34).replace(/[*_]+/g, "")) || BOUND_AFTER.test(text.slice(end, end + 20).split("\n")[0].replace(/^[*_]+/, ""));
-/**
- * Whether the number at `index` heads a table cell whose neighbour to the left (the item) asks for a typical value. The
- * search looks back at most 400 characters, so long single-line answers stay linear.
- */
-function askedTypical(text: string, index: number): boolean {
-  const back = text.slice(Math.max(0, index - 400), index);
-  const cellStart = back.lastIndexOf("|");
-  if (cellStart < 0 || /\d/.test(back.slice(cellStart + 1)) || back.slice(cellStart + 1).includes("\n")) return false;
-  const itemStart = back.lastIndexOf("|", cellStart - 1);
-  return itemStart >= 0 && TYPICAL.test(back.slice(itemStart + 1, cellStart));
-}
+const BOUND = /(\bup to|\bas (long|much|many|high|far) as|\bmore than|\bover|\bat most|\bmaximum( of)?|\bmax\.?|\brecord(ed)?( of)?|\blongest|\bcan\b(\s+\w+){0,4}|\bnearly|\balmost|\bexceed(ing|s)?)\s*$/i;
 // A source number's scale is read from words only: a bare B or M after it is as often bytes or molar.
 const SCALE_FACTOR: Record<string, number> = { thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12 };
 const UNIT_SIGN = /^\s?(%|°)/;
@@ -158,17 +117,14 @@ function contextAt(text: string, index: number): string {
   return line.slice(from, to).trim();
 }
 
-/**
- * Numbers worth checking (three or more digits, a decimal, a % or ° value, or two digits given as typical), quotes and
- * URLs, each once.
- */
+/** Numbers worth checking (three or more digits, a decimal, or a % or ° value), quotes and URLs, each once. */
 export function claimsOf(text: string): Claim[] {
   const out: Claim[] = [];
   const seen = new Set<string>();
-  const add = (kind: Claim["kind"], value: string, index: number, extra: Partial<Claim> = {}) => {
+  const add = (kind: Claim["kind"], value: string, index: number) => {
     if (seen.has(kind + value)) return;
     seen.add(kind + value);
-    out.push({ kind, value, context: contextAt(text, index), ...extra });
+    out.push({ kind, value, context: contextAt(text, index) });
   };
   const prose = blank(text, CODE);
   // Line references go before paths: blanking "src/auth.rs" first hid the ".rs" that marks ":1638" as a line.
@@ -176,13 +132,9 @@ export function claimsOf(text: string): Claim[] {
   for (const m of plain.matchAll(ANSWER_NUMBER)) {
     const n = normNumber(m[0]);
     const after = plain.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
-    const end = m.index! + m[0].length;
-    const typical = TYPICAL.test(clauseBefore(plain, m.index!, 50)) ? "said" : askedTypical(plain, m.index!) ? "asked" : undefined;
-    const checked = significant(n).length >= 3 || n.includes(".") || UNIT_SIGN.test(after);
-    // Two digits count too where the answer gives the value as typical ("typically 90 minutes"), for bounds only.
-    if (checked || (typical && significant(n).length === 2)) {
-      add("number", n, m.index!, { ...(typical && { typical, ownBound: boundAt(plain, m.index!, end) }), ...(!checked && { boundOnly: true }) });
-    }
+    // Two digits count too where the answer gives the value as typical ("typically 90 minutes"): a fact it reports.
+    const typicalHere = significant(n).length === 2 && TYPICAL.test(contextAt(plain, m.index!).split(m[0])[0] ?? "");
+    if (significant(n).length >= 3 || n.includes(".") || UNIT_SIGN.test(after) || typicalHere) add("number", n, m.index!);
   }
   for (const m of quotable(text).matchAll(QUOTE)) if (m[1].trim().split(/\s+/).length >= MIN_QUOTE_WORDS) add("quote", m[1].trim(), m.index!);
   for (const m of prose.matchAll(URL)) add("url", bareUrl(m[0]), m.index!);
@@ -227,16 +179,14 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
     return [...s.matchAll(SOURCE_NUMBER)].flatMap((m) => {
       const value = normNumber(m[0]);
       const end = m.index! + m[0].length;
-      // A source occurrence is a bound when its own words make it one, unless a typical word follows it in its clause
-      // ("can last 45 minutes on average").
-      const at = { source: s, index: m.index!, guessed, bound: boundAt(s, m.index!, end) && !TYPICAL.test(clauseAfter(s, end, 40)) };
+      const at = { source: s, index: m.index!, guessed, bound: BOUND.test(s.slice(Math.max(0, m.index! - 40), m.index!)) || s[end] === "+" };
       // A source number with a scale word ("9.73 million") also stands for its full value (9730000).
       const scale = SCALE_FACTOR[s.slice(m.index! + m[0].length, m.index! + m[0].length + 12).match(SCALE)?.[1] ?? ""];
       return scale ? [{ value, ...at }, { value: String(Math.round(Number(value) * scale)), ...at }] : [{ value, ...at }];
     });
   });
   const circular = new Set<Claim>();
-  const bounded = new Map<Claim, "sources" | "answer">();
+  const bounded = new Set<Claim>();
   const supported = (claim: Claim, rest: string) => {
     if (claim.kind === "url") return sourceUrls.has(normUrl(claim.value));
     if (claim.kind === "quote") {
@@ -249,12 +199,11 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
     const found = numbers.filter(({ value }) => sameNumber(claim.value, value, scaled));
     const counted = found.filter(({ guessed }) => !guessed.has(claim.value));
     if (found.length && !counted.length) circular.add(claim);
-    // Each occurrence with how many of the claim's words are near it (counted to 2, all the decision needs).
+    // Each occurrence with how many of the claim's words are near it.
     const scored = counted.map((occurrence) => {
       if (!words.size) return { occurrence, shared: 1 };
       const near = terms(occurrence.source.slice(Math.max(0, occurrence.index - NEAR_CHARS), occurrence.index + NEAR_CHARS)).filter((t) => !/^\d+$/.test(t));
-      let shared = 0;
-      for (const w of words) if (near.some((t) => sameWord(w, t)) && ++shared >= 2) break;
+      const shared = [...words].filter((w) => near.some((t) => sameWord(w, t))).length;
       return { occurrence, shared: near.length < MIN_NEAR_WORDS ? Math.max(shared, 1) : shared };
     });
     const about = scored.filter(({ shared }) => shared > 0).map(({ occurrence }) => occurrence);
@@ -263,17 +212,11 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
     // minutes", while any clear passage that gives the value plainly ("regularly 60-90 minutes") supports it.
     const clear = Math.min(2, words.size);
     const closest = scored.filter(({ shared }) => shared >= clear && shared > 0).map(({ occurrence }) => occurrence);
-    // The item asks for a typical value and the answer gives a bound ("90+ minutes"); or the answer says it is typical
-    // and every clear source states it only as a bound. An answer that bounds its own value otherwise is honest.
-    if (claim.typical === "asked" && claim.ownBound && about.length) {
-      bounded.set(claim, "answer");
+    if (closest.length && typical(claim) && closest.every(({ bound }) => bound)) {
+      bounded.add(claim);
       return false;
     }
-    if (claim.typical && !claim.ownBound && closest.length && closest.every(({ bound }) => bound)) {
-      bounded.set(claim, "sources");
-      return false;
-    }
-    return about.length > 0 || claim.boundOnly === true;
+    return about.length > 0;
   };
   const missing = claimsOf(answer).filter((claim) => !supported(claim, claim.kind === "number" ? after(claim) : ""));
   if (!missing.length) return [];
@@ -283,13 +226,24 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
     const scores = index.score(claim.context);
     let best = -1;
     for (let i = 0; i < scores.length; i++) if (scores[i].score > 0 && (best < 0 || scores[i].score > scores[best].score)) best = i;
-    const flag = circular.has(claim) ? { circular: true } : bounded.has(claim) ? { bound: bounded.get(claim) } : {};
+    const flag = circular.has(claim) ? { circular: true } : bounded.has(claim) ? { bound: true } : {};
     return best < 0 ? { claim, ...flag } : { claim, ...flag, passage: passages[best].slice(0, PASSAGE_CHARS) };
   });
 }
 
 function textOfSource(source: Source): string {
   return typeof source === "string" ? source : source.text;
+}
+
+/**
+ * Whether the answer gives a claimed number as typical: a typical word before it in its sentence, and no bound of the
+ * answer's own right before it ("records reach up to 117 minutes" states a bound, honestly).
+ */
+function typical(claim: Claim): boolean {
+  const m = [...claim.context.matchAll(ANSWER_NUMBER)].find((x) => normNumber(x[0]) === claim.value);
+  if (!m) return false;
+  const before = claim.context.slice(0, m.index!);
+  return TYPICAL.test(before) && !BOUND.test(before.slice(-40)) && !/\b(record|recorded|maximum|longest)\b[^.]*$/i.test(before.slice(-60));
 }
 
 /** The text after a claimed number in its context, where a scale word such as "million" would be. */
