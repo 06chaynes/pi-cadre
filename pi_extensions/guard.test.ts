@@ -53,6 +53,19 @@ test("writes and edits stay inside the project", () => {
   assert.ok(guard("edit", { path: "../other/a.py" }));
 });
 
+test("a blocked search with many wildcards finds matching project files quickly", () => {
+  // The suggestion turned each pattern into a regex; ten '*'s against a 200-character file name backtracked for 132 s.
+  const dir = mkdtempSync(join(tmpdir(), "cadre-glob-"));
+  writeFileSync(join(dir, "a".repeat(200)), "");
+  writeFileSync(join(dir, "store.py"), "");
+  const started = Date.now();
+  guardReason("bash", { command: "find / -name '" + "*a".repeat(10) + "*b'" }, dir, "/home/nobody");
+  assert.ok(Date.now() - started < 500, `${Date.now() - started} ms`);
+  assert.match(guardReason("bash", { command: "find / -name 's?ore.*'" }, dir, "/home/nobody") ?? "", /Project files matching: store\.py/);
+  assert.match(guardReason("bash", { command: "find / -iname 'STORE.PY'" }, dir, "/home/nobody") ?? "", /Project files matching: store\.py/);
+  assert.doesNotMatch(guardReason("bash", { command: "find / -name 'store.p'" }, dir, "/home/nobody") ?? "", /Project files matching/);
+});
+
 test("a path Pi's tools rewrite (~, @, file://) is checked as Pi will use it", () => {
   // Pi's read, write and edit tools expand ~, strip a leading @ and convert file:// URLs before opening the file; the
   // guard checked the path as written and let "~/.bashrc" through as a project file.

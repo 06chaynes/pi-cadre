@@ -122,28 +122,58 @@ const SKIP_DIRS = new Set([".git", "node_modules", ".venv", "venv", "target", "d
 const MAX_ENTRIES = 5000;
 const MAX_MATCHES = 10;
 
-const glob = (pattern: string, flags: string) =>
-  new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, flags);
+/** A shell name pattern: "*" any run, "?" any one character, everything else literal. */
+interface Glob {
+  pattern: string;
+  path: boolean;
+  ignoreCase: boolean;
+}
+
+/**
+ * Whether `text` matches `pattern` (see Glob), by one pass that backtracks only to the last "*": time grows with the
+ * two lengths multiplied, never exponentially. A regex built from the pattern took 132 s on ten "*"s and a long name.
+ */
+function globMatch(pattern: string, text: string): boolean {
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let resume = 0;
+  while (t < text.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) {
+      p++;
+      t++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      resume = t;
+    } else if (star >= 0) {
+      p = star + 1;
+      t = ++resume;
+    } else return false;
+  }
+  while (p < pattern.length && pattern[p] === "*") p++;
+  return p === pattern.length;
+}
 
 /**
  * What a shell command searches for by name: find's -name, -iname, and -path patterns, and the file name of an
  * absolute path argument (one with an extension).
  */
-function namePatterns(command: string): { path: boolean; re: RegExp }[] {
+function namePatterns(command: string): Glob[] {
   const unquote = (word: string) => word.replace(/^['"]|['"]$/g, "");
-  const patterns: { path: boolean; re: RegExp }[] = [];
+  const patterns: Glob[] = [];
   for (const m of command.matchAll(/-(i?name|i?path)\s+('[^']*'|"[^"]*"|\S+)/g)) {
-    patterns.push({ path: m[1].endsWith("path"), re: glob(unquote(m[2]), m[1].startsWith("i") ? "i" : "") });
+    const ignoreCase = m[1].startsWith("i");
+    patterns.push({ pattern: ignoreCase ? unquote(m[2]).toLowerCase() : unquote(m[2]), path: m[1].endsWith("path"), ignoreCase });
   }
   if (!patterns.length) {
     const name = command.match(/(?:^|\s)['"]?\/[^\s'"]*\/([^\s'"/]+\.[A-Za-z0-9]+)['"]?(?=\s|$)/)?.[1];
-    if (name) patterns.push({ path: false, re: glob(name, "") });
+    if (name) patterns.push({ pattern: name, path: false, ignoreCase: false });
   }
   return patterns;
 }
 
 /** Project files (relative paths) matching every pattern, breadth first within the entry and match limits. */
-function projectMatches(cwd: string, patterns: { path: boolean; re: RegExp }[]): string[] {
+function projectMatches(cwd: string, patterns: Glob[]): string[] {
   if (!patterns.length) return [];
   const found: string[] = [];
   const queue = [""];
@@ -161,7 +191,12 @@ function projectMatches(cwd: string, patterns: { path: boolean; re: RegExp }[]):
       const rel = dir ? `${dir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         if (!SKIP_DIRS.has(entry.name)) queue.push(rel);
-      } else if (patterns.every((p) => p.re.test(p.path ? `./${rel}` : entry.name))) {
+      } else if (
+        patterns.every((p) => {
+          const subject = p.path ? `./${rel}` : entry.name;
+          return globMatch(p.pattern, p.ignoreCase ? subject.toLowerCase() : subject);
+        })
+      ) {
         found.push(rel);
       }
     }
