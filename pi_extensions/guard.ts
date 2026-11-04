@@ -6,7 +6,7 @@
  */
 
 import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, parse, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const WRITE_TOOLS = new Set(["write", "edit"]);
@@ -39,6 +39,16 @@ function asPiOpens(path: string, home: string): string {
     }
   }
   return p;
+}
+
+/**
+ * `path` and the other spellings Pi's read opens when it is missing (Pi 1.4's resolveReadPath): " AM."/" PM." with a
+ * narrow no-break space, the NFD form, "'" as U+2019, and NFD with U+2019. Each is checked, since any may be opened.
+ */
+function readSpellings(path: string): string[] {
+  const curly = (p: string) => p.replace(/'/g, "\u2019");
+  const nfd = path.normalize("NFD");
+  return [...new Set([path, path.replace(/ (AM|PM)\./gi, "\u202f$1."), nfd, curly(path), curly(nfd)])];
 }
 
 /**
@@ -103,7 +113,9 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
   if (toolName === "bash" && typeof input.command === "string") {
     paths = input.command.split(SHELL_WORD_BREAKS).flatMap((word) => shellPath(word, home) ?? []);
   } else if ((WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName)) && typeof input.path === "string") {
-    paths = [asPiOpens(input.path, home)];
+    // Pi resolves a file tool's path against the working directory, applying ".." before any link is followed.
+    const opened = resolve(cwd, asPiOpens(input.path, home));
+    paths = toolName === "read" ? readSpellings(opened) : [opened];
   }
   const outside = paths
     .map((path) => physicalPath(path, realCwd))

@@ -109,10 +109,35 @@ test("resolves dangling links, '..' after a link, and loops the way the OS does"
   symlinkSync(join(base, "Other", "deep"), join(cwd, "linked"));
   symlinkSync("loop", join(cwd, "loop"));
   assert.ok(guardReason("write", { path: "dangling.py" }, cwd, base));
-  assert.ok(guardReason("write", { path: "linked/../escaped.py" }, cwd, base));
   assert.ok(guardReason("bash", { command: "cat linked/../../secret" }, cwd, base));
   assert.ok(guardReason("write", { path: "loop/x" }, cwd, base));
   assert.equal(guardReason("write", { path: "sub/../ok.py" }, cwd, base), undefined);
+});
+
+test("a file tool's '..' applies before symlinks, as Pi resolves the path before opening it", () => {
+  // Pi's file tools resolve the path lexically against the working directory, then open the result: a link followed
+  // by '..' does not lead where the link points. The OS order (link first) let "current/../../.bashrc" through while Pi
+  // wrote the home directory's .bashrc.
+  const { base, cwd } = tempTree();
+  mkdirSync(join(cwd, "releases", "v1", "build"), { recursive: true });
+  symlinkSync(join(cwd, "releases", "v1", "build"), join(cwd, "current"));
+  symlinkSync(join(base, "Other", "deep"), join(cwd, "linked"));
+  assert.ok(guardReason("write", { path: "current/../../.bashrc" }, cwd, base));
+  assert.ok(guardReason("read", { path: "current/../../.bashrc" }, cwd, base));
+  assert.equal(guardReason("write", { path: "linked/../inside.py" }, cwd, base), undefined);
+});
+
+test("a read checks every other spelling Pi tries when the path is missing", () => {
+  // Pi's read falls back to the path with ' as \u2019, " AM."/" PM." with a narrow no-break space, and NFD: a link
+  // named x\u2019y in the project made read "x'y/..." open the link's target outside the project.
+  const { base, cwd } = tempTree();
+  symlinkSync(join(base, "Other"), join(cwd, "x\u2019y"));
+  symlinkSync(join(base, "Other"), join(cwd, "Shot 1.02\u202fPM.dir"));
+  symlinkSync(join(base, "Other"), join(cwd, "cafe\u0301"));
+  assert.ok(guardReason("read", { path: "x'y/secret" }, cwd, base));
+  assert.ok(guardReason("read", { path: "Shot 1.02 PM.dir/secret" }, cwd, base));
+  assert.ok(guardReason("read", { path: "caf\u00e9/secret" }, cwd, base));
+  assert.equal(guardReason("read", { path: "sub/it's 1 PM.txt" }, cwd, base), undefined);
 });
 
 test("compares paths in on-disk case on case-insensitive file systems", (t) => {
