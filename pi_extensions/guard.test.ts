@@ -45,7 +45,7 @@ test("allows project paths, system directories, and plain commands", () => {
   }
 });
 
-test("writes and edits stay inside the project", () => {
+test("[R13] writes and edits stay inside the project", () => {
   assert.equal(guard("write", { path: "src/a.py" }), undefined);
   assert.equal(guard("edit", { path: "/home/u/proj/a.py" }), undefined);
   assert.ok(guard("write", { path: "/tmp/a.py" }));
@@ -66,7 +66,7 @@ test("a blocked search with many wildcards finds matching project files quickly"
   assert.doesNotMatch(guardReason("bash", { command: "find / -name 'store.p'" }, dir, "/home/nobody") ?? "", /Project files matching/);
 });
 
-test("a path Pi's tools rewrite (~, @, file://) is checked as Pi will use it", () => {
+test("[R13] a path Pi's tools rewrite (~, @, file://) is checked as Pi will use it", () => {
   // Pi's read, write and edit tools expand ~, strip a leading @ and convert file:// URLs before opening the file; the
   // guard checked the path as written and let "~/.bashrc" through as a project file.
   const outside = [`~/.bashrc`, `~`, `@${HOME}/.zshrc`, `@~/.ssh/id_rsa`, `file://${HOME}/.zshrc`, `\u00a0~/.bashrc`.trim(), `~/.ssh/id_rsa`];
@@ -77,7 +77,7 @@ test("a path Pi's tools rewrite (~, @, file://) is checked as Pi will use it", (
   for (const path of [`@src/app.py`, `file://${CWD}/src/app.py`, `@${CWD}/notes.md`]) assert.equal(guardReason("write", { path }, CWD, HOME), undefined, path);
 });
 
-test("reads may use system directories but nothing else outside the project", () => {
+test("[R13] reads may use system directories but nothing else outside the project", () => {
   assert.equal(guard("read", { path: "/etc/hosts" }), undefined);
   assert.equal(guard("ls", {}), undefined);
   assert.equal(guard("grep", { pattern: "x", path: "tests" }), undefined);
@@ -165,13 +165,17 @@ test("compares paths in on-disk case on case-insensitive file systems", (t) => {
   assert.equal(guardReason("write", { path: join(base, "proj", "x.py") }, cwd, base), undefined);
 });
 
-test("a block says the way forward: project paths, and web_search for information from the web", () => {
-  const reason = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me")!;
+test("[R13] a block says the way forward: project paths, and the active tools beyond the project's, by name", () => {
+  const reason = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me", ["web_search", "fetch_content"])!;
   assert.match(reason, /Paths inside the project work: relative paths start at \/work\/inv\./);
-  assert.match(reason, /For information from the web, use web_search\./);
+  assert.match(reason, /For information from outside the project, use web_search, fetch_content\./);
   // LFM3 presented the block text as the file's contents ("Here's what's in each file") in 8 of 10 exact replays;
   // starting with "Blocked:" it did so in 0 of 10, and Spark answered correctly 10 of 10 either way.
   assert.match(reason, /^Blocked: bash reaches /);
+  // With no such tool installed, no tool is named: the block named web_search whether or not it existed.
+  const alone = guardReason("bash", { command: "find / -name store.py" }, "/work/inv", "/Users/me", [])!;
+  assert.doesNotMatch(alone, /web_search|use \w+_\w+/);
+  assert.match(alone, /ask the user to run \/cadre-guard off\./);
 });
 
 test("a blocked search for a name lists the project files with that name, without running the command", () => {

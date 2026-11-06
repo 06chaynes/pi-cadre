@@ -105,9 +105,16 @@ function shellPath(word: string, home: string): string | undefined {
 /**
  * Returns why a tool call reaches outside the project at `cwd`, or undefined when it does not. `home` expands ~ and
  * $HOME, and is never treated as a system directory even when it lies under one. Paths are compared after following
- * symlinks.
+ * symlinks. `otherTools`, the active tools beyond Pi's local ones, are named in a block as the way to information from
+ * outside the project.
  */
-export function guardReason(toolName: string, input: Record<string, unknown>, cwd: string, home: string): string | undefined {
+export function guardReason(
+  toolName: string,
+  input: Record<string, unknown>,
+  cwd: string,
+  home: string,
+  otherTools: readonly string[] = [],
+): string | undefined {
   const realCwd = physicalPath(cwd, "/");
   const realHome = physicalPath(home, "/");
   const systemDirs = SYSTEM_DIRS.map((dir) => physicalPath(dir, "/"));
@@ -125,9 +132,10 @@ export function guardReason(toolName: string, input: Record<string, unknown>, cw
     .map((path) => physicalPath(path, realCwd))
     .find((path) => (WRITE_TOOLS.has(toolName) ? !isInside(path, realCwd) : !readable(path)));
   if (outside === undefined) return undefined;
+  const elsewhere = otherTools.length ? `For information from outside the project, use ${otherTools.join(", ")}. ` : "";
   const reason =
     `${BLOCKED}${toolName} reaches ${outside}, outside the project ${cwd}. Paths inside the project work: relative paths start at ${cwd}. ` +
-    "For information from the web, use web_search. To work outside the project, ask the user to run /cadre-guard off.";
+    `${elsewhere}To work outside the project, ask the user to run /cadre-guard off.`;
   // A blocked search for a name gets the project's files with that name, found here without running the command.
   const found = toolName === "bash" && typeof input.command === "string" ? projectMatches(cwd, namePatterns(input.command)) : [];
   return found.length ? `${reason} Project files matching: ${found.join(", ")}` : reason;

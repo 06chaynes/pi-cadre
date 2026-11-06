@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.3]
+
+### Fixed
+
+- Source-check false alarms:
+  - a write-up's own section numbers ("### 1.2 Periodic re-sync", "see §1.2") are not claims;
+  - a quotation matches its source when it contains inline code (`provider`), writes a different dash (60–90 for
+    60-90), or leaves words out with an ellipsis (each quoted part must be in a source);
+  - a line number written as `line ~647` or after a file path (`auth_oidc.rs:1638`) is a position in the code;
+  - a value rounded from a source's decimals (71 °C from 71.2°C) and a value a source writes with a scale word
+    (9,730,000 for 9.73 million) are supported.
+- A path-guard block names the active tools beyond Pi's own as the way to outside information, or none when there are
+  none; it named `web_search` whether or not such a tool was installed.
+
 ## [0.3.2]
 
 ### Security

@@ -36,14 +36,26 @@ const ANSWER_NUMBER = new RegExp(`(?<![\\w.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 const SOURCE_NUMBER = new RegExp(`(?<![\\d.])(?:${GROUPED})(?:\\.\\d+)*`, "g");
 // Code and file paths are the model's own material, not claims about sources.
 const CODE = /```[\s\S]*?```|`[^`\n]*`/g;
+// Quotations are read with fenced blocks left out and inline code kept as words: inline code inside a quotation is part
+// of the quoted words, while quote marks inside inline code (a string literal) never start or end one.
+const FENCED = /```[\s\S]*?```/g;
+const INLINE_CODE = /`[^`\n]*`/g;
+const quotable = (text: string) => blank(text, FENCED).replace(INLINE_CODE, (code) => code.replace(/["“”]/g, " "));
 // The second form starts only where a word starts: started inside a long word it backtracked over the rest of it.
 const PATH = /(?:~|\.{1,2})?(?:\/[\w.@%+-]+){2,}|(?<![\w.-])[\w.-]+(?:\/[\w.@%+-]+){2,}/g;
 // Line numbers into files ("line 190", "lines 183-188 and 202", "sessions.py:159-210") are positions in the code, which
 // read results do not print, so like paths they are not claims about sources.
 const RANGE = "\\d+(?:\\s*[-–]\\s*\\d+)?";
-const LINE_REF = new RegExp(`\\blines?\\s+${RANGE}(?:\\s*(?:,|and)\\s*${RANGE})*|(?<=\\.\\w{1,5}):${RANGE}`, "gi");
+// A line number may be approximate ("line ~647").
+const APPROX = "(?:~\\s*)?";
+const LINE_REF = new RegExp(`\\blines?\\s+${APPROX}${RANGE}(?:\\s*(?:,|and)\\s*${APPROX}${RANGE})*|(?<=\\.\\w{1,5}):${RANGE}`, "gi");
 const QUOTE = /["“]([^"”\n]{12,300})["”]/g;
+// A Markdown heading's section number ("### 1.2 Periodic re-sync") and a citation of a section ("see §1.2", "section
+// 1.2"): the write-up's own structure. The same number elsewhere (a table cell) is still a claim.
+const SECTION_NUMBER = /^ {0,3}#{1,6}[ \t]+\d+(?:\.\d+)+\.?(?=[ \t])|§\s*\d+(?:\.\d+)*|\bsections?\s+\d+(?:\.\d+)+/gim;
 const SCALE = /^\s*(thousand|million|billion|trillion|[kMB]\b)/;
+// A source number's scale is read from words only (a bare B or M is as often a unit).
+const SCALE_FACTOR: Record<string, number> = { thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12 };
 const UNIT_SIGN = /^\s?(%|°)/;
 // Fewer words than this near a source number (a passage in another script) and the number alone counts.
 const MIN_NEAR_WORDS = 3;
@@ -78,7 +90,9 @@ const normNumber = (n: string) => n.replace(/[,\u2009\u202f ]/g, "");
 // Line comment and quote markers at line starts (///, //, #, *, --, ;, >) are dropped, so a quoted doc comment or
 // quoted block that spans lines matches its source.
 const LINE_MARKER = /^[ \t]*(?:\/\/[\/!]?|#+|\*|--|;+|>+)[ \t]?/gm;
-const normText = (s: string) => s.replace(LINE_MARKER, "").replace(/[“”"'’*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+// Brackets go too: a doc comment links names ([`provider`]) that a quotation of it writes plainly.
+// Dashes are one character: a quotation may write 60–90 where its source has 60-90.
+const normText = (s: string) => s.replace(LINE_MARKER, "").replace(/[“”"'’*_`[\]]/g, "").replace(/[‐‑‒–—−]/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
 const blank = (text: string, pattern: RegExp) => text.replace(pattern, (m) => " ".repeat(m.length));
 const significant = (n: string) => n.replace(/\D/g, "").replace(/^0+/, "");
 
@@ -105,13 +119,14 @@ export function claimsOf(text: string): Claim[] {
     out.push({ kind, value, context: contextAt(text, index) });
   };
   const prose = blank(text, CODE);
-  const plain = blank(blank(blank(prose, URL), PATH), LINE_REF);
+  // Line references first: they need the file name before them (auth.rs:1638), which path blanking removes.
+  const plain = blank(blank(blank(blank(prose, URL), SECTION_NUMBER), LINE_REF), PATH);
   for (const m of plain.matchAll(ANSWER_NUMBER)) {
     const n = normNumber(m[0]);
     const after = plain.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
     if (significant(n).length >= 3 || n.includes(".") || UNIT_SIGN.test(after)) add("number", n, m.index!);
   }
-  for (const m of prose.matchAll(QUOTE)) if (m[1].trim().split(/\s+/).length >= MIN_QUOTE_WORDS) add("quote", m[1].trim(), m.index!);
+  for (const m of quotable(text).matchAll(QUOTE)) if (m[1].trim().split(/\s+/).length >= MIN_QUOTE_WORDS) add("quote", m[1].trim(), m.index!);
   for (const m of prose.matchAll(URL)) add("url", bareUrl(m[0]), m.index!);
   return out;
 }
@@ -124,6 +139,9 @@ function sameNumber(n: string, s: string, scaled: boolean): boolean {
   if (n === s) return true;
   // A flattened power: the source number is the claim with its base (one or two digits) in front.
   if (!n.includes(".") && n.length >= 6 && s.length > n.length && s.length - n.length <= 2 && s.endsWith(n)) return true;
+  // A claim with fewer decimals than its source, rounded from it (71 from 71.2, 3.14 from 3.14159).
+  const decimals = (x: string) => x.split(".")[1]?.length ?? 0;
+  if (significant(n).length >= 2 && decimals(n) < decimals(s) && Number(s).toFixed(decimals(n)) === n) return true;
   // A rounded claim: the source is more precise (has decimals) or the claim names a scale (14.2 million).
   if (!s.includes(".") && !scaled) return false;
   const d = n.includes(".") ? significant(n) : significant(n).replace(/0+$/, "");
@@ -147,14 +165,21 @@ export function unsupportedClaims(answer: string, sources: readonly Source[], ev
   const numbers = sources.flatMap((src) => {
     const s = textOfSource(src);
     const guessed = new Set(typeof src === "string" ? [] : src.guessed.map(normNumber));
-    return [...s.matchAll(SOURCE_NUMBER)].map((m) => ({ value: normNumber(m[0]), source: s, index: m.index!, guessed }));
+    return [...s.matchAll(SOURCE_NUMBER)].flatMap((m) => {
+      const value = normNumber(m[0]);
+      const at = { source: s, index: m.index!, guessed };
+      // A source number with a scale word ("9.73 million") also stands for its full value (9730000).
+      const scale = SCALE_FACTOR[s.slice(m.index! + m[0].length, m.index! + m[0].length + 12).match(SCALE)?.[1] ?? ""];
+      return scale ? [{ value, ...at }, { value: String(Math.round(Number(value) * scale)), ...at }] : [{ value, ...at }];
+    });
   });
   const circular = new Set<Claim>();
   const supported = (claim: Claim, rest: string) => {
     if (claim.kind === "url") return sourceUrls.has(normUrl(claim.value));
     if (claim.kind === "quote") {
-      const opening = normText(claim.value).split(" ").slice(0, QUOTE_WORDS).join(" ");
-      return sourceTexts.some((text) => text.includes(opening));
+      // A quotation may leave words out with an ellipsis ("... this computes"): each part it quotes must be in a source.
+      const parts = claim.value.split(/\s*(?:\.\.\.|…)\s*/).map((part) => normText(part).replace(/[.,;:!?]+$/, "").split(" ").slice(0, QUOTE_WORDS).join(" ")).filter(Boolean);
+      return sourceTexts.some((text) => parts.every((part) => text.includes(part)));
     }
     const scaled = SCALE.test(rest);
     const words = new Set(terms(claim.context).filter((t) => !/^\d+$/.test(t)));

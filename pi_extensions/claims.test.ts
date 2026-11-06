@@ -32,6 +32,13 @@ test("a rounded number is supported by a more precise source value, but a year i
   assert.equal(unsupportedClaims("Python was released in 2024.", ["Python release id 20241 notes"]).length, 1);
 });
 
+test("a value with a unit, rounded from a source's decimals, is supported (71 °C from 71.2°C), and a wrong one is not", () => {
+  const source = "At the summit of Mount Everest, the boiling point of water is approximately 160.1°F (71.2°C).";
+  assert.deepEqual(unsupportedClaims("Water boils at roughly 71 °C at the summit of Everest.", [source]), []);
+  assert.deepEqual(unsupportedClaims("Water boils at 71.2 °C at the summit of Everest.", [source]), []);
+  assert.equal(unsupportedClaims("Water boils at roughly 72 °C at the summit of Everest.", [source]).length, 1);
+});
+
 test("a number found only in a passage about something else is unsupported", () => {
   const answer = "Water boils at about 90 °C at the summit of Everest.";
   const unrelated = "RELNOTES-0.01 line 90: notes for linux release 0.01, sources to the kernel";
@@ -57,6 +64,59 @@ test("code spans, code blocks and file paths are not claims", () => {
 test("line numbers that point into files are positions in the code, not claims", () => {
   assert.deepEqual(values("The loop lives in requests/sessions.py:159-210, and the limit is checked at line 190 (lines 237–243 rebuild auth; see lines 183-188 and 202)."), []);
   assert.deepEqual(values("An airline 747 carries 416 passengers on a file.py-free route."), ["number:747", "number:416"]);
+});
+
+test("a write-up's own section numbers, in its headings and where it refers to them, are not claims", () => {
+  const doc = "### 1.1 Login-time application\nRoles apply at login.\n\n### 2.2 No membership\nA user with \"no membership\" (see §2.2) keeps 3.5 roles; section 1.1 explains it.\n## 3 Removal\nThe 2.5% case.";
+  assert.deepEqual(values(doc), ["number:3.5", "number:2.5"]);
+  // A number in a heading's text, not its section number, is still a claim.
+  assert.deepEqual(values("## Results for 2024\nThe 1.1 release shipped."), ["number:2024", "number:1.1"]);
+});
+
+test("a quotation keeps the inline code in it, so a quoted doc comment matches its source", () => {
+  // The code span was blanked before quotes were read, leaving "Withdraw every grant    's group mappings" to match.
+  const answer = 'Its doc comment says: "Withdraw every grant `provider`\'s group mappings made to `user`, whatever the sync mode."';
+  const source = "/// Withdraw every grant [`provider`]'s group mappings made to [`user`], whatever the sync mode.";
+  assert.deepEqual(unsupportedClaims(answer, [source]), []);
+});
+
+test("a line number written with ~ is a position in the code, not a claim", () => {
+  assert.deepEqual(values("It is defined in token.rs (line ~647), and called at lines ~12-14."), []);
+});
+
+test("a number is supported by a source that writes it with a scale word (9.73 million for 9,730,000)", () => {
+  assert.deepEqual(unsupportedClaims("The 23 wards have about 9,730,000 residents.", ["The 23 special wards are home to 9.73 million residents."]), []);
+  assert.equal(unsupportedClaims("The 23 wards have about 9,780,000 residents.", ["The 23 special wards are home to 9.73 million residents."]).length, 1);
+});
+
+test("a quotation that leaves words out with an ellipsis is matched by its words before the first one", () => {
+  const source = "/// Find an active token by access token. Unlike a lookup by id, this computes the blind index first.";
+  assert.deepEqual(unsupportedClaims('It says: "Find an active token by access token. ... this computes the blind index."', [source]), []);
+  assert.deepEqual(unsupportedClaims('It says: "Find an active token by access token … this computes the blind index."', [source]), []);
+  assert.equal(unsupportedClaims('It says: "Find a revoked token by its id ... this computes the blind index."', [source]).length, 1);
+});
+
+test("a quotation matches its source whatever dash it writes (60–90 for 60-90)", () => {
+  const source = "Sperm whales regularly dive for 60-90 minutes, while most baleen whales stay down for less.";
+  assert.deepEqual(unsupportedClaims('WhalePedia: "Sperm whales regularly dive for 60–90 minutes..."', [source]), []);
+});
+
+test("a line number after a file path (auth_oidc.rs:1638) is a position in the code, not a claim", () => {
+  assert.deepEqual(values("The caller is `settle_role_sync` (mandible/src/routes/auth_oidc.rs:1638), not role.rs:474."), []);
+});
+
+test("the false-alarm fixes do not accept wrong values or made-up quotes", () => {
+  // A one-digit value does not round from just any decimal nearby.
+  assert.equal(unsupportedClaims("Unemployment was 3% in 2023.", ["In 2023 unemployment rose to 4.1%, while inflation eased to 2.6%."]).length, 1);
+  assert.equal(unsupportedClaims("The error rate is 0% on the benchmark.", ["The error rate on the benchmark is 0.4%."]).length, 1);
+  // Every part of a quotation with an ellipsis must be in the source, not only the part before it.
+  const report = "According to the report, GDP grew modestly in March.";
+  assert.equal(unsupportedClaims('He wrote: "according to the report ... GDP fell by a record amount in March".', [report]).length, 1);
+  // A section number counts only as a heading's own number and where the text cites the section.
+  assert.deepEqual(values("## 2.5 Results\n\n| Speedup | 2.5 |"), ["number:2.5"]);
+  // "lines near 450" in prose is not a line number; a bare B or M is not billion or million.
+  assert.deepEqual(values("The bus lines near 450 stops were cut."), ["number:450"]);
+  assert.equal(unsupportedClaims("The file is 200000000000 bytes.", ["The file is 200 B on disk."]).length, 1);
 });
 
 test("an answer may group digits with plain spaces", () => {
